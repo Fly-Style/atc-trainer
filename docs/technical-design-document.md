@@ -44,6 +44,7 @@ atc-trainer/
     atc-shared/
     atc-server/
     atc-client/
+    atc-test-support/
 ```
 
 High-level flow:
@@ -145,6 +146,31 @@ Suggested modules:
 - `theme`
 - `storage`
 - `dialog`
+
+### `atc-test-support`
+
+Responsibility:
+
+- headless protocol harness used by integration tests
+- in-process server builder bound to an ephemeral port
+- typed HTTP and WebSocket test client built on `atc-shared` DTOs
+- scenario and METAR fixtures
+- simulated-time helpers for movement ticks and cooldown windows
+- temporary log sinks for per-test isolation
+
+Must not contain:
+
+- `iced` dependencies
+- production runtime logic
+- any `#[cfg(test)]`-only code that belongs inside server or client tests
+
+Suggested modules:
+
+- `server` — `TestServer` spawning an `axum::Router` on a random port
+- `client` — `TestClient` wrapping `reqwest` and `tokio-tungstenite`
+- `fixtures` — scenario and session presets
+- `time` — simulated-time helpers
+- `logs` — temp-directory log capture
 
 ## Server Design
 
@@ -447,37 +473,103 @@ Preferred release strategy:
 
 ## Testing Strategy
 
-### Shared Crate
+Integration tests are written alongside the implementation of each phase, not bolted on at the end. They drive the protocol contract for `atc-shared`, catch regressions before they reach the `iced` client, and keep Phase 4 packaging honest.
 
-- serialization tests
-- validation tests
-- scenario parsing tests
+### Principles
 
-### Server
+- target the protocol, not the `iced` UI
+- exercise the real `atc-server` through a headless protocol client
+- one server per test; no shared session state across tests
+- use simulated time for movement ticks and cooldown windows
+- reuse `atc-shared` DTOs directly so protocol drift is a compile error, not a runtime surprise
 
-- HTTP endpoint tests
-- WebSocket protocol tests
-- per-session event ordering tests
-- runway-switch reassignment tests
-- log-format tests
+### Test Harness
 
-### Client
+Tests use an in-process server and a headless `TestClient`, both provided by `atc-test-support`.
 
-- smoke tests for state reducers / message handling where practical
-- manual validation for `iced` interactions
-- focused manual testing for zoom/pan, label focus, and path drafting
+- build the `axum::Router` directly and bind to an ephemeral port with `TcpListener`
+- run on the `tokio::test` runtime
+- HTTP calls go through `reqwest`
+- WebSocket calls go through `tokio-tungstenite`
+- time-sensitive behavior advances through `tokio::time::pause` and `tokio::time::advance`
+- log output routes to a per-test `tempfile::tempdir`
 
-### End-to-End
+Tradeoff: the in-process harness bypasses the real binary entrypoint and config loader. That gap is closed by one subprocess smoke test in Phase 4, not by duplicating every integration test at the binary level.
 
-At minimum, verify:
+### Unit Tests
 
-1. trainer login and session creation
-2. student join by session hash
-3. live aircraft synchronization between two clients
-4. trainer path creation and launch
-5. student metadata editing on assumed aircraft
-6. pause and resume
-7. session log generation
+#### `atc-shared`
+
+- serialization round-trip for every DTO
+- validation helpers
+- scenario `TOML` parsing, including malformed fixtures
+
+#### `atc-server`
+
+- runway-switch SID conversion logic
+- log line formatting
+- per-session event ordering under concurrent input
+
+#### `atc-client`
+
+- reducer and message-handler logic where practical
+- manual validation for `iced` canvas interactions, zoom, pan, focus, and path drafting
+
+### Integration Tests
+
+Integration tests live in `crates/atc-server/tests/` and depend on `atc-test-support`. They are grouped by phase and added with the code that makes them pass. Pre-staging later-phase tests before their prerequisites rots fixtures and is explicitly avoided.
+
+#### Phase 1 — HTTP and WS handshake
+
+- trainer login: valid magic hash returns `200`; invalid returns `401`
+- session creation returns `session_id` and `session_hash`
+- student position creation supports `GND` and `TWR`
+- join by session hash: valid accepted; wrong hash rejected; unknown session returns `404`
+- start session transitions `draft` → `waiting_for_student` → `running`
+- WebSocket connect with valid auth delivers one full `session_state` snapshot
+- WebSocket connect without auth is rejected
+- scenario `TOML` loads and populates the session aircraft collection
+
+#### Phase 2 — Multi-client sync
+
+- two WebSocket clients on one session both receive the initial snapshot
+- a server-side state change broadcasts identical events to both clients
+
+#### Phase 3 — Operational commands
+
+- trainer `create_aircraft` broadcasts `aircraft_created`
+- aircraft limit enforced: the `31`st creation is rejected
+- draft path → `Finish pathing` → edit speed and altitude → `launch_path` emits position updates along straight-line segments under simulated time
+- a launched path cannot be replaced until the aircraft is stopped on the ground
+- student `update_aircraft` on assumed traffic is accepted; on unassumed traffic is rejected
+- trainer may edit any traffic
+- active runway switch auto-reassigns all ground aircraft and converts any assigned SID to the paired variant, for example `east1a` ↔ `east1b`
+- `GND`: `assigned_runway` is cleared on assumption
+- `TWR`: `assigned_runway` is cleared when the aircraft vacates the runway
+- `go-around` sets runway heading only, then returns control to the trainer
+- `rejected takeoff` accepted only in an on-runway departure state
+- pause freezes aircraft movement; metadata edits remain accepted
+- resume continues aircraft motion from the frozen pose
+- two trainers sending conflicting commands on the same aircraft produce one deterministic serialized order, and both observers see identical final state
+
+#### Phase 4 — Lifecycle and logging
+
+- student disconnect does not end the session
+- all trainers disconnect begins a cooldown
+- any trainer reconnect within `3` minutes keeps the session alive
+- no trainer reconnect within `3` minutes auto-closes the session
+- the log file contains one line per accepted action with `timestamp`, `session`, `actor`, `aircraft`, `action`, and `result`
+
+#### Phase 4 — Binary smoke test
+
+- one subprocess test launches the real server binary with the built-in scenario and runs a minimal trainer-login, session-create, and WebSocket-snapshot flow
+
+### Sequencing
+
+- Phase 1 tests land with the HTTP routes and WebSocket skeleton
+- Phase 2 tests land with the client shell and sync layer
+- Phase 3 tests land with the runtime command loop
+- Phase 4 tests land with pause, cooldown, logging, and packaging
 
 ## Risks And Mitigations
 
@@ -539,7 +631,7 @@ Goal:
 
 Deliverables:
 
-- Rust workspace with `atc-shared`, `atc-server`, and `atc-client`
+- Rust workspace with `atc-shared`, `atc-server`, `atc-client`, and `atc-test-support`
 - shared ids, enums, DTOs, scenario types, and sector/scenery structures
 - scenario `TOML` parsing
 - trainer auth endpoint
@@ -548,6 +640,7 @@ Deliverables:
 - serialized per-session event loop
 - WebSocket handshake and initial snapshot support
 - baseline file logging
+- Phase 1 integration tests as defined in the Testing Strategy
 
 Exit criteria:
 
@@ -576,6 +669,7 @@ Deliverables:
 - local zoom/pan
 - focus hit-testing
 - WebSocket-driven live session synchronization
+- Phase 2 integration tests as defined in the Testing Strategy
 
 Exit criteria:
 
@@ -602,6 +696,7 @@ Deliverables:
 - stop ground aircraft
 - go-around and rejected takeoff
 - trainer-only path visibility
+- Phase 3 integration tests as defined in the Testing Strategy
 
 Exit criteria:
 
@@ -626,6 +721,7 @@ Deliverables:
 - portable folder packaging
 - trainer/student playtest runbook
 - final defect triage and cleanup
+- Phase 4 integration tests and the binary smoke test as defined in the Testing Strategy
 
 Exit criteria:
 

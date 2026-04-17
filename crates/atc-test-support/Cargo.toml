@@ -1,0 +1,19 @@
+[package]
+name = "atc-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+atc-shared = { path = "../atc-shared" }
+atc-server = { path = "../atc-server" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+tempfile = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
