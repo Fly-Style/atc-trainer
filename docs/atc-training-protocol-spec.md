@@ -1249,7 +1249,7 @@ Scenario definition responsibilities:
 
 There is no built-in scenario editor.
 For v1, scenarios should be loadable from external files.
-The application should also include one built-in standard scenery so the system remains usable without external scenario files.
+The application should also include exactly one built-in standard scenario so the system remains usable without external scenario files.
 
 Recommended v1 scenario file format:
 
@@ -1354,7 +1354,22 @@ Client display rules locked for v1:
 - label frame color depends on squawk mode:
   - `off` -> gray
   - `standby` -> white
-  - `tara` -> green
+  - `charlie` -> green
+
+Additional label rules:
+
+- for SID-driven IFR traffic, the displayed next waypoint should be the directional outer fix name
+- example: `north1a` and `north1b` both display next waypoint `NORTH`
+
+Built-in sector navigation points:
+
+- the sector includes named outer points `NORTH`, `EAST`, `SOUTH`, and `WEST`
+- each point is located `10 NM` beyond the CTR boundary in its respective direction
+
+Assigned runway auto-clear rules:
+
+- when operated in `GND`, `assigned_runway` is cleared automatically when the aircraft is assumed
+- when operated in `TWR`, `assigned_runway` is cleared automatically when the aircraft has vacated the runway
 
 ## Logging
 

@@ -239,7 +239,7 @@ Concrete v1 visual language:
 - transponder label frame colors:
   - `off`: gray
   - `standby`: white
-  - `tara`: green
+  - `charlie`: green
 
 Recommended v1 layout:
 
@@ -299,6 +299,11 @@ The sector view should visually render:
 - main taxiway
 - four runway exits
 - CTR quadrangle
+- outer cardinal points:
+  - `NORTH`
+  - `EAST`
+  - `SOUTH`
+  - `WEST`
 - active-runway ILS depiction
 - aircraft positions and movement
 - aircraft labels with:
@@ -328,6 +333,12 @@ Sector coordinate and camera model in v1:
 - runway, taxiways, CTR, ILS, aircraft, labels, vectors, and trainer path points use the same world space
 - zoom and pan are local client view state, independent for each connected user
 - zoom should be performed toward the current mouse position
+- the outer cardinal points `NORTH`, `EAST`, `SOUTH`, and `WEST` are placed `10 NM` beyond the CTR boundary in their respective directions
+
+For SID-driven IFR traffic, the radar label should show the directional waypoint name as the next waypoint.
+Example:
+
+- `north1a` or `north1b` should display next waypoint `NORTH`
 
 Trainer path control in v1 is point-based:
 
@@ -393,6 +404,11 @@ The traffic manager should allow the student to:
 
 The traffic manager is not responsible for physically moving aircraft.
 Movement remains under trainer control.
+
+Assigned runway clearing rules in v1:
+
+- for `GND`, `assigned_runway` is cleared automatically when the aircraft is assumed
+- for `TWR`, `assigned_runway` is cleared automatically when the aircraft has vacated the runway
 
 Edit permissions:
 
@@ -774,6 +790,27 @@ The built-in standard scenery should represent:
 - CTR square extending `10 NM` in each cardinal direction
 - ILS depiction for `18` and `36`
 - four SID families with paired runway variants
+- outer cardinal points `NORTH`, `EAST`, `SOUTH`, and `WEST`, each placed `10 NM` beyond the CTR boundary
+- explicit named spawn points for the built-in airport, including:
+  - `stand_1`
+  - `stand_2`
+  - `stand_3`
+  - `stand_4`
+  - `stand_5`
+  - `hold_18`
+  - `hold_36`
+  - `ctr_north`
+  - `ctr_east`
+  - `ctr_south`
+  - `ctr_west`
+  - `pattern_downwind_18`
+  - `pattern_base_18`
+  - `pattern_final_18`
+  - `pattern_downwind_36`
+  - `pattern_base_36`
+  - `pattern_final_36`
+  - `taxi_main_northbound`
+  - `exit_c_to_main`
 
 ## Networking Draft
 
