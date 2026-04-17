@@ -1,0 +1,105 @@
+# Medium-complexity sample scenario for v1.
+# Student position: GND
+# Active runway: 36
+
+scenario_id = "gnd_medium_36"
+name = "GND Medium RWY36"
+student_position_type = "gnd"
+initial_active_runway = "36"
+metar = "AAAA 171200Z 02008KT 9999 FEW030 SCT060 18/11 Q1018"
+
+[[aircraft]]
+aircraft_id = "ac_001"
+template = "vfr_c172"
+callsign = "YL-VFR"
+flight_rules = "vfr"
+departure_airfield = "AAAA"
+destination_airfield = "AAAW"
+route = "VFR WESTBOUND DEPARTURE"
+initial_spawn = "stand_1"
+initial_status = "new"
+squawk_mode = "standby"
+
+[[aircraft]]
+aircraft_id = "ac_002"
+template = "ifr_a320"
+callsign = "BTI201"
+flight_rules = "ifr"
+departure_airfield = "AAAA"
+destination_airfield = "AAAN"
+route = "NORTH1B"
+initial_spawn = "stand_2"
+initial_status = "cleared"
+squawk_mode = "standby"
+assigned_sid = "north1b"
+assigned_runway = "36"
+assigned_altitude_ft = 5000
+
+[[aircraft]]
+aircraft_id = "ac_003"
+template = "ifr_a320"
+callsign = "FIN874"
+flight_rules = "ifr"
+departure_airfield = "AAAA"
+destination_airfield = "AAAE"
+route = "EAST1B"
+initial_spawn = "stand_3"
+initial_status = "startup"
+squawk_mode = "standby"
+assigned_sid = "east1b"
+assigned_runway = "36"
+assigned_altitude_ft = 6000
+
+[[aircraft]]
+aircraft_id = "ac_004"
+template = "ifr_a320"
+callsign = "DLH432"
+flight_rules = "ifr"
+departure_airfield = "AAAA"
+destination_airfield = "AAAS"
+route = "SOUTH1B"
+initial_spawn = "stand_4"
+initial_status = "push"
+squawk_mode = "standby"
+assigned_sid = "south1b"
+assigned_runway = "36"
+assigned_altitude_ft = 5000
+
+[[aircraft]]
+aircraft_id = "ac_005"
+template = "ifr_a320"
+callsign = "WZZ915"
+flight_rules = "ifr"
+departure_airfield = "AAAA"
+destination_airfield = "AAAW"
+route = "WEST1B"
+initial_spawn = "stand_5"
+initial_status = "new"
+squawk_mode = "standby"
+
+[[aircraft]]
+aircraft_id = "ac_006"
+template = "vfr_c172"
+callsign = "LY-ABC"
+flight_rules = "vfr"
+departure_airfield = "AAAA"
+destination_airfield = "AAAW"
+route = "VFR WEST LOCAL"
+initial_spawn = "taxi_main_northbound"
+initial_status = "taxi"
+squawk_mode = "charlie"
+assigned_runway = "36"
+assigned_altitude_ft = 2500
+
+[[aircraft]]
+aircraft_id = "ac_007"
+template = "ifr_a320"
+callsign = "RYR6TR"
+flight_rules = "ifr"
+departure_airfield = "AAAN"
+destination_airfield = "AAAA"
+route = "ARRIVAL COMPLETE TAXI TO STAND"
+initial_spawn = "exit_c_to_main"
+initial_status = "taxi"
+squawk_mode = "charlie"
+assigned_runway = "36"
