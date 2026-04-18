@@ -212,8 +212,10 @@ fn create_session_requires_trainer_auth() {
 
 #[test]
 fn create_student_position_includes_session_id() {
-    let mut s = ClientState::default();
-    s.auth = AuthState::Trainer { token: "tk".into(), trainer_id: TrainerId::new("t1") };
+    let mut s = ClientState {
+        auth: AuthState::Trainer { token: "tk".into(), trainer_id: TrainerId::new("t1") },
+        ..ClientState::default()
+    };
     let sid = SessionId::new("sess_xyz");
     let effects = process(
         &mut s,
@@ -317,8 +319,10 @@ fn trainer_set_path_emits_ws_command() {
 
 #[test]
 fn disconnect_clears_session_and_emits_close() {
-    let mut s = ClientState::default();
-    s.session = Some(CachedSession::from_snapshot(empty_snapshot()));
+    let mut s = ClientState {
+        session: Some(CachedSession::from_snapshot(empty_snapshot())),
+        ..ClientState::default()
+    };
     let effects = process(&mut s, AppCommand::Disconnect);
     assert!(s.session.is_none());
     assert!(matches!(effects[0], SideEffect::CloseWebSocket));

@@ -4,6 +4,7 @@ pub const SCENARIO_GND_36_MEDIUM: &str = include_str!("../../../docs/scenario-gn
 
 pub fn base_config() -> atc_server::ServerConfig {
     atc_server::ServerConfig {
+        bind_address: "127.0.0.1:0".to_string(),
         trainer_hashes: vec![TEST_TRAINER_HASH.to_string()],
         log_dir: None,
         builtin_scenario_toml: Some(SCENARIO_GND_36_MEDIUM.to_string()),

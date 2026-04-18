@@ -33,11 +33,10 @@ pub fn sid_outer_fix(sid: &str) -> Option<&'static str> {
 }
 
 fn matches_runway(sid: &str, runway: &str) -> bool {
-    match (sid.ends_with('a'), sid.ends_with('b'), runway) {
-        (true, _, "18") => true,
-        (_, true, "36") => true,
-        _ => false,
-    }
+    matches!(
+        (sid.ends_with('a'), sid.ends_with('b'), runway),
+        (true, _, "18") | (_, true, "36")
+    )
 }
 
 /// Returns true if a squawk code is a plausible four-digit training code.

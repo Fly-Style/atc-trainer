@@ -22,7 +22,7 @@ pub enum Message {
     ConfirmAction,
     CancelConfirmation,
     HttpDone(Result<HttpOutcome, String>),
-    WsEvent(ServerEvent),
+    WsEvent(Box<ServerEvent>),
     WsReady(WsCommandSender),
     WsDisconnected(String),
     StartFieldChanged(StartField, String),
@@ -308,7 +308,7 @@ impl AtcApp {
             Message::WsEvent(ev) => {
                 if let Some(session) = self.state.session.as_mut() {
                     session.apply_event(&ev);
-                } else if let ServerEvent::SessionState(snap) = &ev {
+                } else if let ServerEvent::SessionState(snap) = ev.as_ref() {
                     self.state.session = Some(CachedSession::from_snapshot((**snap).clone()));
                 }
                 self.sync_forms_from_focus();
@@ -436,7 +436,7 @@ impl AtcApp {
                     Ok(mut sess) => {
                         let _ = output.send(Message::WsReady(sess.commands.clone())).await;
                         while let Some(ev) = sess.events.recv().await {
-                            if output.send(Message::WsEvent(ev)).await.is_err() {
+                            if output.send(Message::WsEvent(Box::new(ev))).await.is_err() {
                                 break;
                             }
                         }

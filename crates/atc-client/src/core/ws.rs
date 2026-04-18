@@ -83,7 +83,7 @@ pub async fn open(
                         Ok(text) => text,
                         Err(_) => continue,
                     };
-                    if sink.send(WsMessage::Text(text.into())).await.is_err() {
+                    if sink.send(WsMessage::Text(text)).await.is_err() {
                         break;
                     }
                 }

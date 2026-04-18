@@ -1,0 +1,4 @@
+bind_address = "127.0.0.1:8080"
+trainer_hashes = ["test-trainer-hash"]
+log_dir = "logs"
+builtin_scenario_path = "docs/scenario-gnd-36-medium.toml"
