@@ -552,6 +552,124 @@ Integration tests live in `crates/atc-server/tests/` and depend on `atc-test-sup
 - resume continues aircraft motion from the frozen pose
 - two trainers sending conflicting commands on the same aircraft produce one deterministic serialized order, and both observers see identical final state
 
+#### Phase 3 — Operational Workflow
+
+##### Context
+
+Phase 1 delivered the workspace + auth + WS handshake. Phase 2 delivered multi-client sync and a read-only client. Phase 3 is the core training loop: trainer issues operational commands (spawn, path, go-around,
+runway switch, pause/resume), student edits assumed traffic, and the server simulates aircraft motion along trainer-drafted paths. Per docs/technical-design-document.md lines 681–706 and the test list at lines
+538–553. All client→server semantics in docs/atc-training-protocol-spec.md §"Client To Server Events" (line 857+).
+
+The server today drops all inbound WS messages; the protocol crate has no client-event types; there is no simulation tick. This plan adds those pieces, the corresponding command handlers, and the iced UI to drive
+them.
+
+##### Out of Scope (deferred to Phase 4)
+
+- Cooldown / auto-close on trainer disconnect
+- Per-action structured action log (basic file logger already exists)
+- Subprocess binary smoke test
+- Any pathing beyond straight-line segments
+
+##### Scope Defaults (assumed unless user objects)
+
+- Sim tick: 4 Hz (250 ms) per-session task. Movement is straight-line between path points; reaching a point advances current_node; finishing the path stops the aircraft and clears active_path.
+- Aircraft cap: 30 total per session (31st spawn rejected, per TDD).
+- Path draft UX: trainer enters draft mode → clicks on canvas to append points → "Finish pathing" freezes geometry → per-point speed/altitude editor → "Launch" arms the path. Trainer-only overlay. Undo only the
+  last drafted point pre-finish.
+- Two-trainer test fakery: register a second trainer token via a new tokens.issue_trainer call inside the test (already supported by auth.rs); we do not add a second trainer-hash flow to login.
+- Pause freezes the tick loop's motion advancement only; metadata edits still flow.
+
+##### Critical Files
+
+atc-shared
+
+- crates/atc-shared/src/protocol.rs — add ClientEvent enum, WsClientEnvelope<T>, TrainerCommand (internally tagged on kind), and student-action payloads.
+- crates/atc-shared/src/aircraft.rs — extend AircraftState with:
+    - assumed_by_position: Option<atc_shared::ids::PositionId>
+    - assumed_by_role: Option<Role> (so trainer-assumed aircraft are distinguishable)
+    - draft_path: Option<RadarPath>
+    - active_path: Option<RadarPath>
+    - path_cursor: Option<PathCursor> (current segment index + 0..1 progress)
+- New module crates/atc-shared/src/path.rs with RadarPath { points: Vec<PathPoint> }, PathPoint { seq, x_nm, y_nm, target_speed_kt, target_altitude: TargetAltitude }, TargetAltitude { Gnd | Msl(i32) }.
+
+atc-server
+
+- crates/atc-server/src/sessions.rs — add command-handling methods on SessionRecord (one per kind), each returns the ServerEvent(s) to broadcast and a domain Result. Helpers: spawn_aircraft, remove_aircraft,
+  assign_runway, set_active_runway (with auto-reassign + SID a/b swap via SectorMetadata::sids[…].paired_sid_id), set_speed, set_path (draft), launch_path, stop_ground_aircraft, trigger_go_around,
+  trigger_rejected_takeoff, set_aircraft_profile, pause_session, resume_session, student_update, student_assume, student_handoff. Each bumps revision and broadcasts.
+- crates/atc-server/src/ws.rs — accept inbound Message::Text, parse WsClientEnvelope<ClientEvent>, dispatch. On reject, send CommandRejected. Hold the SessionRecord mutex for the duration of one command (gives the
+  deterministic per-session ordering required by the multi-trainer test).
+- crates/atc-server/src/sim.rs (new) — spawn_session_ticker(arc: Arc<Mutex<SessionRecord>>) -> tokio::task::JoinHandle<()>. Loop: tokio::time::interval(250ms); on each tick, lock the record; if status == Running,
+  advance every aircraft with an active_path by dt = 0.25 s along straight-line geometry at target_speed_kt (NM/h → NM/s). On reaching a point, advance path_cursor.segment and snap to next; on reaching the last
+  point, clear active_path, set ground_speed_kt = 0, broadcast AircraftUpdated. The handle is stored on SessionRecord and aborted on session removal (Phase 4 cleanup; for now it lives for the process lifetime).
+- crates/atc-server/src/sessions.rs — kick off the ticker in SessionRegistry::create.
+- crates/atc-server/src/error.rs — add AppError::AircraftLimitExceeded, AircraftNotFound, NotAssumed, InvalidStateTransition, PathNotDrafted, PathAlreadyLaunched, etc.; add corresponding code() strings.
+
+atc-client core
+
+- crates/atc-client/src/core/command.rs — extend AppCommand with the operational verbs (assume, handoff, student edit, spawn, remove, set_active_runway, set_speed, set_path/draft, finish_pathing, launch_path,
+  stop, go_around, rto, pause, resume, profile). Add SideEffect::SendWsMessage(serde_json::Value) so the runtime can push an outbound WS frame (the WS task gains a back-channel mpsc::UnboundedSender<String>).
+  View-only additions: draft-path interaction state (DraftMode { active: bool, points: Vec<PathPoint>, target: Option<AircraftId> }) on ViewState.
+- crates/atc-client/src/core/state.rs — student-vs-trainer authority gate inside process — student commands on a non-assumed aircraft short-circuit to a ReportError so the user sees the rejection without hitting
+  the server.
+- crates/atc-client/src/core/ws.rs — WsSession gains outbound: mpsc::UnboundedSender<String>; the pump task forwards both directions.
+
+atc-client UI
+
+- crates/atc-client/src/ui/session_screen.rs — replace the side panel with two stacked panels: TrafficManager (focused aircraft details + role-appropriate edit form) and TrainerToolbox (visible only to trainers:
+  Spawn aircraft form, Set active runway, Pause/Resume, Begin draft / Finish pathing / Launch path / Stop / Go-around / RTO).
+- crates/atc-client/src/ui/sector_canvas.rs — when view.draft_mode.active, left-click adds a PathPoint instead of focusing/dragging; render the draft polyline + numbered markers (trainer-only).
+- New crates/atc-client/src/ui/forms/ modules: student_edit_form.rs, spawn_form.rs, path_point_editor.rs for the per-point speed/altitude editor shown after Finish pathing.
+
+Tests
+
+- crates/atc-server/tests/phase3_ops.rs (new) — one test per TDD bullet:
+  a. trainer_create_aircraft_broadcasts — trainer spawn → both clients receive aircraft_created with the expected callsign.
+  b. aircraft_limit_enforced — spawn 30 → ok; 31st → command_rejected with code aircraft_limit_exceeded.
+  c. launch_path_advances_position — spawn airborne with a 2-point path; launch; tick clock manually (test helper exposes SessionRecord::tick(dt)); assert second aircraft_updated shows position progressed along
+  the segment.
+  d. launched_path_cannot_be_replaced — set_path after launch on airborne aircraft → rejected with path_already_launched.
+  e. student_update_assumed_accepted_unassumed_rejected — pre-assume one aircraft for the student; student update on it succeeds; on a second (unassumed) one rejected with not_assumed.
+  f. trainer_may_edit_any_traffic — trainer updates student-assumed aircraft → accepted.
+  g. active_runway_switch_reassigns_ground_and_flips_sid — pre-place two ground aircraft (one with assigned_sid="east1b"); set_active_runway "18"; both get assigned_runway="18", the SID-bearer's sid becomes
+  east1a.
+  h. go_around_sets_runway_heading — airborne aircraft on approach → trigger_go_around → state shows runway-heading active path; control returned to trainer (assumed_by cleared/role flipped).
+  i. rejected_takeoff_only_on_runway_departure — RTO on parked → rejected; on OnRunway departure → accepted, aircraft stops.
+  j. pause_freezes_motion_metadata_still_flows — launch + pause; ticks do not move position; trainer assign_runway still accepted and broadcast.
+  k. two_trainers_serialized_deterministic — two trainer tokens, each sends set_speed with different values back-to-back; both clients see the same final value (the second one, by ordering); assert equality across
+  clients.
+- crates/atc-test-support/src/client.rs — extend TestClient with send_ws(&mut WsStream, ClientEvent), next_event_of_type<T>(...) helpers.
+- crates/atc-test-support/src/server.rs — expose a tokens.issue_trainer(...) helper for the two-trainer test.
+- crates/atc-client/tests/core_state.rs — add cases: assumption transitions, draft-path append/finish/launch flow drives correct outbound payloads, student edit on unassumed → ReportError side effect.
+
+Reused Patterns
+
+- SessionRecord::bump_and_broadcast (sessions.rs:56) is the model for every command handler — bump revision, send a typed ServerEvent. Phase 3 handlers extend this pattern with new event variants
+  (AircraftCreated/Updated/Removed).
+- WS sink already encodes WsEnvelope<&ServerEvent> via send_event (ws.rs:102). Extend symmetrically: a recv_event decodes WsEnvelope<ClientEvent>.
+- apply_event reducer in state.rs:79 already handles all the new aircraft event variants — no client-side reducer changes needed for new commands, only for assumed_by_* field display.
+- auth.rs::TokenStore already supports multiple trainers — re-use unchanged.
+- bump_and_broadcast signature should grow a richer event model: introduce SessionRecord::broadcast(ServerEvent) so each command sends typed events directly rather than going through the limited (status,
+  active_runway) shape.
+
+Verification
+
+Server / shared / client-core changes are testable headlessly:
+
+cargo test -p atc-shared
+cargo test -p atc-server          # phase1 + phase2 + phase3_ops + scenario unit
+cargo test -p atc-client --tests  # core_state cases
+cargo test --workspace            # everything green
+
+Build the iced binary to confirm UI compiles (user runs interactively):
+
+cargo build -p atc-client --bin atc-client
+
+User-side smoke (manual): launch server (cargo run -p atc-server), launch two client instances → trainer login + create session, student joins by hash → trainer spawns an aircraft, drafts and launches a path →
+both clients see motion → trainer pauses → motion freezes → trainer changes active runway → ground aircraft auto-reassigned. Trainer hits Go-around on an airborne arrival → aircraft tracks runway heading.
+
+Use RustRover MCP build_project for fast incremental verification between edits.
+
 #### Phase 4 — Lifecycle and logging
 
 - student disconnect does not end the session

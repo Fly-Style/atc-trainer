@@ -50,3 +50,19 @@ impl ScenarioFile {
         Self::from_toml_str(&s)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_example_scenario() {
+        let scenario =
+            ScenarioFile::from_toml_str(include_str!("../../../docs/scenario-gnd-36-medium.toml"))
+                .expect("scenario should parse");
+        assert_eq!(scenario.scenario_id, "gnd_medium_36");
+        assert_eq!(scenario.initial_active_runway, "36");
+        assert_eq!(scenario.aircraft.len(), 7);
+        assert!(scenario.aircraft.iter().any(|a| a.callsign == "BTI201"));
+    }
+}

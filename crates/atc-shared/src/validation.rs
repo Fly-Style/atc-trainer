@@ -17,6 +17,21 @@ pub fn paired_sid_for_runway(sid: &str, target_runway: &str) -> Option<&'static 
     }
 }
 
+/// Maps a SID variant to its displayed directional outer fix.
+pub fn sid_outer_fix(sid: &str) -> Option<&'static str> {
+    if sid.starts_with("north1") {
+        Some("NORTH")
+    } else if sid.starts_with("east1") {
+        Some("EAST")
+    } else if sid.starts_with("south1") {
+        Some("SOUTH")
+    } else if sid.starts_with("west1") {
+        Some("WEST")
+    } else {
+        None
+    }
+}
+
 fn matches_runway(sid: &str, runway: &str) -> bool {
     match (sid.ends_with('a'), sid.ends_with('b'), runway) {
         (true, _, "18") => true,
@@ -55,5 +70,12 @@ mod tests {
         assert!(is_valid_squawk("4123"));
         assert!(!is_valid_squawk("123"));
         assert!(!is_valid_squawk("12a4"));
+    }
+
+    #[test]
+    fn sid_to_outer_fix() {
+        assert_eq!(sid_outer_fix("north1a"), Some("NORTH"));
+        assert_eq!(sid_outer_fix("west1b"), Some("WEST"));
+        assert_eq!(sid_outer_fix("unknown"), None);
     }
 }

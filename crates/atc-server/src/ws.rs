@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::auth::TokenSubject;
 use atc_shared::ids::{ConnectionId, SessionId};
-use atc_shared::protocol::{HelloPayload, ServerEvent, WsEnvelope};
+use atc_shared::protocol::{ClientEvent, HelloPayload, ServerEvent, WsEnvelope};
 use atc_shared::role::Role;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -44,14 +44,16 @@ pub async fn ws_handler(
     };
 
     let receiver = arc.lock().unwrap().broadcaster.subscribe();
-    ws.on_upgrade(move |socket| handle_socket(socket, arc, session_id, role, receiver))
+    ws.on_upgrade(move |socket| handle_socket(socket, state, arc, session_id, role, subject, receiver))
 }
 
 async fn handle_socket(
     socket: WebSocket,
+    state: AppState,
     arc: std::sync::Arc<std::sync::Mutex<crate::sessions::SessionRecord>>,
     session_id: SessionId,
     role: Role,
+    subject: TokenSubject,
     mut receiver: tokio::sync::broadcast::Receiver<ServerEvent>,
 ) {
     let (mut sink, mut stream) = socket.split();
@@ -69,7 +71,19 @@ async fn handle_socket(
 
     // Send full session snapshot.
     let snapshot = {
-        let rec = arc.lock().unwrap();
+        let mut rec = arc.lock().unwrap();
+        match &subject {
+            TokenSubject::Trainer { trainer_id } => {
+                if let Some(trainer) = rec.trainers.iter_mut().find(|trainer| trainer.trainer_id == *trainer_id) {
+                    trainer.connected = true;
+                }
+            }
+            TokenSubject::Student { .. } => {
+                if let Some(position) = rec.student_position.as_mut() {
+                    position.connection_state = atc_shared::session::ConnectionState::Connected;
+                }
+            }
+        }
         ServerEvent::SessionState(Box::new(rec.to_state()))
     };
     if send_event(&mut sink, &session_id, &snapshot).await.is_err() {
@@ -91,9 +105,34 @@ async fn handle_socket(
             msg = stream.next() => {
                 match msg {
                     Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(env) = serde_json::from_str::<WsEnvelope<ClientEvent>>(&text) {
+                            let _ = crate::commands::handle_client_event(
+                                state.clone(),
+                                session_id.clone(),
+                                subject.clone(),
+                                env.payload,
+                            ).await;
+                        }
+                        continue;
+                    }
                     Some(Ok(_)) => continue,
                     Some(Err(_)) => break,
                 }
+            }
+        }
+    }
+
+    let mut rec = arc.lock().unwrap();
+    match subject {
+        TokenSubject::Trainer { trainer_id } => {
+            if let Some(trainer) = rec.trainers.iter_mut().find(|trainer| trainer.trainer_id == trainer_id) {
+                trainer.connected = false;
+            }
+        }
+        TokenSubject::Student { .. } => {
+            if let Some(position) = rec.student_position.as_mut() {
+                position.connection_state = atc_shared::session::ConnectionState::Disconnected;
             }
         }
     }

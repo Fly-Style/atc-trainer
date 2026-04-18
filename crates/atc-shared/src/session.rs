@@ -1,6 +1,6 @@
 use crate::aircraft::AircraftState;
 use crate::ids::*;
-use crate::role::{StudentPositionType, TrainerKind};
+use crate::role::StudentPositionType;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -32,7 +32,6 @@ pub struct StudentPosition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrainerInfo {
     pub trainer_id: TrainerId,
-    pub trainer_kind: TrainerKind,
     pub connected: bool,
 }
 
@@ -44,7 +43,7 @@ pub struct SessionSummary {
     pub status: SessionStatus,
     pub student_position_type: Option<StudentPositionType>,
     pub student_connected: bool,
-    pub lead_trainer_connected: bool,
+    pub connected_trainers: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

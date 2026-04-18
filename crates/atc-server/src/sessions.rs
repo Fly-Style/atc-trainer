@@ -4,8 +4,8 @@ use crate::logging::SessionLog;
 use crate::scenario::initial_aircraft;
 use atc_shared::aircraft::AircraftState;
 use atc_shared::ids::*;
-use atc_shared::protocol::{HelloPayload, ServerEvent};
-use atc_shared::role::{Role, TrainerKind};
+use atc_shared::protocol::{HelloPayload, ServerEvent, SessionUpdatedPayload};
+use atc_shared::role::Role;
 use atc_shared::scenario::ScenarioFile;
 use atc_shared::sector::builtin_sector;
 use atc_shared::session::*;
@@ -51,6 +51,25 @@ impl SessionRecord {
         }
     }
 
+    /// Bump revision and broadcast a `SessionUpdated` event.
+    /// Used for Phase 2 sync (and later for any state-change broadcast hook).
+    pub fn bump_and_broadcast(&mut self, status: Option<SessionStatus>, active_runway: Option<String>) -> u64 {
+        if let Some(s) = status {
+            self.status = s;
+        }
+        if let Some(r) = &active_runway {
+            self.active_runway = r.clone();
+        }
+        self.revision = self.revision.saturating_add(1);
+        let payload = SessionUpdatedPayload {
+            status,
+            active_runway,
+            revision: self.revision,
+        };
+        let _ = self.broadcaster.send(ServerEvent::SessionUpdated(payload));
+        self.revision
+    }
+
     pub fn to_summary(&self) -> SessionSummary {
         SessionSummary {
             session_id: self.session_id.clone(),
@@ -63,9 +82,7 @@ impl SessionRecord {
                 .as_ref()
                 .map(|p| matches!(p.connection_state, ConnectionState::Connected))
                 .unwrap_or(false),
-            lead_trainer_connected: self.trainers.iter().any(|t| {
-                matches!(t.trainer_kind, TrainerKind::LeadTrainer) && t.connected
-            }),
+            connected_trainers: self.trainers.iter().filter(|t| t.connected).count(),
         }
     }
 }
@@ -110,7 +127,6 @@ impl SessionRegistry {
             student_position: None,
             trainers: vec![TrainerInfo {
                 trainer_id: lead_trainer_id,
-                trainer_kind: TrainerKind::LeadTrainer,
                 connected: true,
             }],
             aircraft,

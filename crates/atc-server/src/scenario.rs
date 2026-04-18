@@ -1,6 +1,7 @@
 use atc_shared::aircraft::*;
 use atc_shared::ids::AircraftId;
 use atc_shared::scenario::ScenarioFile;
+use atc_shared::validation::sid_outer_fix;
 
 /// Convert a scenario aircraft definition into an initial runtime `AircraftState`.
 pub fn scenario_aircraft_to_state(
@@ -37,13 +38,18 @@ pub fn scenario_aircraft_to_state(
         current_node: Some(sa.initial_spawn.clone()),
         target_node: None,
         scenario_placement: Some(sa.initial_spawn.clone()),
-        next_waypoint: None,
+        next_waypoint: sa.assigned_sid.as_deref().and_then(sid_outer_fix).map(str::to_string),
         ground_speed_kt: 0.0,
         air_speed_kt: None,
         altitude_ft: 0.0,
         x_nm: 0.0,
         y_nm: 0.0,
         trainer_profile: None,
+        assumed_by_student: false,
+        handed_off: false,
+        draft_path: None,
+        active_path: None,
+        path_run_id: 0,
         revision: 1,
     }
 }
@@ -65,4 +71,24 @@ pub fn initial_aircraft(scenario: &ScenarioFile) -> Vec<AircraftState> {
         .iter()
         .map(scenario_aircraft_to_state)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atc_shared::scenario::ScenarioFile;
+
+    #[test]
+    fn sid_sets_directional_next_waypoint() {
+        let scenario =
+            ScenarioFile::from_toml_str(include_str!("../../../docs/scenario-gnd-36-medium.toml"))
+                .expect("scenario parses");
+        let aircraft = initial_aircraft(&scenario);
+        let northbound = aircraft
+            .iter()
+            .find(|aircraft| aircraft.callsign == "BTI201")
+            .expect("northbound aircraft");
+        assert_eq!(northbound.assigned_sid.as_deref(), Some("north1b"));
+        assert_eq!(northbound.next_waypoint.as_deref(), Some("NORTH"));
+    }
 }

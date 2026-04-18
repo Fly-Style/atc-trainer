@@ -63,6 +63,28 @@ pub enum AircraftOrigin {
     Manual,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PathPoint {
+    pub seq: u32,
+    pub x_nm: f32,
+    pub y_nm: f32,
+    pub target_speed_kt: f32,
+    pub target_altitude: TargetAltitude,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum TargetAltitude {
+    Gnd,
+    MslFt { value_ft: i32 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FlightPath {
+    pub points: Vec<PathPoint>,
+    pub launched: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AircraftState {
     pub aircraft_id: AircraftId,
@@ -92,5 +114,10 @@ pub struct AircraftState {
     pub x_nm: f32,
     pub y_nm: f32,
     pub trainer_profile: Option<String>,
+    pub assumed_by_student: bool,
+    pub handed_off: bool,
+    pub draft_path: Option<FlightPath>,
+    pub active_path: Option<FlightPath>,
+    pub path_run_id: u64,
     pub revision: u64,
 }

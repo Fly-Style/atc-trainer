@@ -8,6 +8,12 @@ pub struct WorldPoint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedPoint {
+    pub name: String,
+    pub point: WorldPoint,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "shape", rename_all = "snake_case")]
 pub enum CtrShape {
     Square { half_extent_nm: f32 },
@@ -47,6 +53,8 @@ pub struct SectorMetadata {
     pub runways: Vec<RunwayInfo>,
     pub sids: Vec<SidInfo>,
     pub ils: Vec<IlsInfo>,
+    pub outer_points: Vec<NamedPoint>,
+    pub spawn_points: Vec<NamedPoint>,
 }
 
 pub fn builtin_sector() -> SectorMetadata {
@@ -75,6 +83,33 @@ pub fn builtin_sector() -> SectorMetadata {
         ils: vec![
             IlsInfo { runway: "18".into(), course_deg: 176, visible_when_active: true },
             IlsInfo { runway: "36".into(), course_deg: 356, visible_when_active: true },
+        ],
+        outer_points: vec![
+            NamedPoint { name: "NORTH".into(), point: WorldPoint { x_nm: 0.0, y_nm: 20.0 } },
+            NamedPoint { name: "EAST".into(), point: WorldPoint { x_nm: 20.0, y_nm: 0.0 } },
+            NamedPoint { name: "SOUTH".into(), point: WorldPoint { x_nm: 0.0, y_nm: -20.0 } },
+            NamedPoint { name: "WEST".into(), point: WorldPoint { x_nm: -20.0, y_nm: 0.0 } },
+        ],
+        spawn_points: vec![
+            NamedPoint { name: "stand_1".into(), point: WorldPoint { x_nm: -1.4, y_nm: -0.9 } },
+            NamedPoint { name: "stand_2".into(), point: WorldPoint { x_nm: -1.1, y_nm: -0.9 } },
+            NamedPoint { name: "stand_3".into(), point: WorldPoint { x_nm: -0.8, y_nm: -0.9 } },
+            NamedPoint { name: "stand_4".into(), point: WorldPoint { x_nm: -0.5, y_nm: -0.9 } },
+            NamedPoint { name: "stand_5".into(), point: WorldPoint { x_nm: -0.2, y_nm: -0.9 } },
+            NamedPoint { name: "hold_18".into(), point: WorldPoint { x_nm: 0.0, y_nm: -0.3 } },
+            NamedPoint { name: "hold_36".into(), point: WorldPoint { x_nm: 0.0, y_nm: 0.3 } },
+            NamedPoint { name: "ctr_north".into(), point: WorldPoint { x_nm: 0.0, y_nm: 10.0 } },
+            NamedPoint { name: "ctr_east".into(), point: WorldPoint { x_nm: 10.0, y_nm: 0.0 } },
+            NamedPoint { name: "ctr_south".into(), point: WorldPoint { x_nm: 0.0, y_nm: -10.0 } },
+            NamedPoint { name: "ctr_west".into(), point: WorldPoint { x_nm: -10.0, y_nm: 0.0 } },
+            NamedPoint { name: "pattern_downwind_18".into(), point: WorldPoint { x_nm: 1.4, y_nm: -2.4 } },
+            NamedPoint { name: "pattern_base_18".into(), point: WorldPoint { x_nm: 0.8, y_nm: -1.2 } },
+            NamedPoint { name: "pattern_final_18".into(), point: WorldPoint { x_nm: 0.1, y_nm: -0.8 } },
+            NamedPoint { name: "pattern_downwind_36".into(), point: WorldPoint { x_nm: -1.4, y_nm: 2.4 } },
+            NamedPoint { name: "pattern_base_36".into(), point: WorldPoint { x_nm: -0.8, y_nm: 1.2 } },
+            NamedPoint { name: "pattern_final_36".into(), point: WorldPoint { x_nm: -0.1, y_nm: 0.8 } },
+            NamedPoint { name: "taxi_main_northbound".into(), point: WorldPoint { x_nm: -0.4, y_nm: 0.5 } },
+            NamedPoint { name: "exit_c_to_main".into(), point: WorldPoint { x_nm: 0.6, y_nm: 0.2 } },
         ],
     }
 }

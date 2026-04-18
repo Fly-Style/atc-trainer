@@ -1,9 +1,10 @@
-use atc_server::{build_router, ServerConfig};
+use atc_server::{build_router, AppState, ServerConfig};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
 pub struct TestServer {
     pub addr: SocketAddr,
+    pub state: AppState,
     pub log_dir: Option<tempfile::TempDir>,
     _join: tokio::task::JoinHandle<()>,
 }
@@ -17,7 +18,7 @@ impl TestServer {
         } else {
             None
         };
-        let (router, _state) = build_router(cfg);
+        let (router, state) = build_router(cfg);
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("local_addr");
         let join = tokio::spawn(async move {
@@ -25,6 +26,7 @@ impl TestServer {
         });
         Self {
             addr,
+            state,
             log_dir: temp,
             _join: join,
         }

@@ -19,6 +19,8 @@ pub enum AppError {
     StudentPositionOccupied,
     #[error("student position already exists")]
     StudentPositionAlreadyExists,
+    #[error("aircraft not found")]
+    AircraftNotFound,
     #[error("session already ended")]
     SessionEnded,
     #[error("bad request: {0}")]
@@ -37,6 +39,7 @@ impl AppError {
             AppError::StudentPositionMissing => "student_position_missing",
             AppError::StudentPositionOccupied => "student_position_occupied",
             AppError::StudentPositionAlreadyExists => "student_position_already_exists",
+            AppError::AircraftNotFound => "aircraft_not_found",
             AppError::SessionEnded => "session_ended",
             AppError::BadRequest(_) => "bad_request",
             AppError::Internal(_) => "internal_error",
@@ -52,6 +55,7 @@ impl AppError {
             AppError::StudentPositionMissing => StatusCode::BAD_REQUEST,
             AppError::StudentPositionOccupied => StatusCode::CONFLICT,
             AppError::StudentPositionAlreadyExists => StatusCode::CONFLICT,
+            AppError::AircraftNotFound => StatusCode::NOT_FOUND,
             AppError::SessionEnded => StatusCode::CONFLICT,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
