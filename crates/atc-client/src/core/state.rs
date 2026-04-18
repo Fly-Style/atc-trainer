@@ -139,10 +139,10 @@ impl ViewState {
     /// Multiplicative zoom step. Clamped to a usable range so wheel/key
     /// presses can't take the canvas to a degenerate scale.
     pub fn zoom_in(&mut self) {
-        self.zoom_px_per_nm = (self.zoom_px_per_nm * 1.25).min(800.0);
+        self.zoom_px_per_nm = (self.zoom_px_per_nm * 1.4).min(20_000.0);
     }
     pub fn zoom_out(&mut self) {
-        self.zoom_px_per_nm = (self.zoom_px_per_nm / 1.25).max(2.0);
+        self.zoom_px_per_nm = (self.zoom_px_per_nm / 1.4).max(1.0);
     }
     pub fn pan_by_nm(&mut self, dx: f32, dy: f32) {
         self.pan_nm.0 += dx;

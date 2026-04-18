@@ -135,11 +135,11 @@ fn view_zoom_clamps_within_bounds() {
     for _ in 0..50 {
         v.zoom_in();
     }
-    assert!(v.zoom_px_per_nm <= 800.0);
+    assert!(v.zoom_px_per_nm <= 20_000.0);
     for _ in 0..50 {
         v.zoom_out();
     }
-    assert!(v.zoom_px_per_nm >= 2.0);
+    assert!(v.zoom_px_per_nm >= 1.0);
 }
 
 #[test]

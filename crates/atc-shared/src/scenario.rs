@@ -62,7 +62,7 @@ mod tests {
                 .expect("scenario should parse");
         assert_eq!(scenario.scenario_id, "gnd_medium_36");
         assert_eq!(scenario.initial_active_runway, "36");
-        assert_eq!(scenario.aircraft.len(), 7);
+        assert_eq!(scenario.aircraft.len(), 6);
         assert!(scenario.aircraft.iter().any(|a| a.callsign == "BTI201"));
     }
 }

@@ -186,12 +186,28 @@ fn draw_sector(
             &Path::line(Point::new(pa.0, pa.1), Point::new(pb.0, pb.1)),
             Stroke::default()
                 .with_color(Color::from_rgb(0.85, 0.85, 0.9))
-                .with_width(3.0),
+                .with_width(6.0),
         );
+        frame.fill_text(Text {
+            content: rwy.ends[0].clone(),
+            position: Point::new(pa.0 + 8.0, pa.1 + 8.0),
+            color: Color::from_rgb(0.95, 0.95, 0.98),
+            size: 13.0.into(),
+            ..Text::default()
+        });
+        frame.fill_text(Text {
+            content: rwy.ends[1].clone(),
+            position: Point::new(pb.0 + 8.0, pb.1 - 10.0),
+            color: Color::from_rgb(0.95, 0.95, 0.98),
+            size: 13.0.into(),
+            ..Text::default()
+        });
     }
 
+    draw_ground_layout(frame, view, canvas_size, sector);
+
     // ILS localiser: project from threshold opposite to the runway course
-    // (i.e., out toward where approach traffic is coming from).
+    // from 10 NM final to the runway threshold.
     for ils in &sector.ils {
         if !ils.visible_when_active || ils.runway != active_runway {
             continue;
@@ -200,15 +216,14 @@ fn draw_sector(
         let approach_rad = (ils.course_deg as f32 + 180.0).to_radians();
         let dx = approach_rad.sin();
         let dy = approach_rad.cos();
-        let length_nm = 8.0;
-        let end = (origin.x_nm + dx * length_nm, origin.y_nm + dy * length_nm);
-        let s = view.world_to_screen((origin.x_nm, origin.y_nm), canvas_size);
-        let e = view.world_to_screen(end, canvas_size);
+        let start_world = (origin.x_nm + dx * 10.0, origin.y_nm + dy * 10.0);
+        let s = view.world_to_screen(start_world, canvas_size);
+        let e = view.world_to_screen((origin.x_nm, origin.y_nm), canvas_size);
         frame.stroke(
             &Path::line(Point::new(s.0, s.1), Point::new(e.0, e.1)),
             Stroke::default()
                 .with_color(Color::from_rgb(0.3, 0.7, 0.5))
-                .with_width(1.0),
+                .with_width(1.2),
         );
     }
 
@@ -224,6 +239,110 @@ fn draw_sector(
             size: 11.0.into(),
             ..Text::default()
         });
+    }
+}
+
+fn draw_ground_layout(
+    frame: &mut Frame,
+    view: &crate::core::state::ViewState,
+    canvas_size: (f32, f32),
+    sector: &SectorMetadata,
+) {
+    let taxiway_label_color = Color::from_rgb(0.92, 0.45, 0.74);
+    let main_taxiway_x = lookup_named(&sector.spawn_points, "taxi_main_north")
+        .map(|point| point.x_nm)
+        .unwrap_or(-0.95);
+
+    if let (Some(main_south), Some(main_north)) = (
+        lookup_named(&sector.spawn_points, "taxi_main_south"),
+        lookup_named(&sector.spawn_points, "taxi_main_north"),
+    ) {
+        let south = view.world_to_screen((main_south.x_nm, main_south.y_nm), canvas_size);
+        let north = view.world_to_screen((main_north.x_nm, main_north.y_nm), canvas_size);
+        frame.stroke(
+            &Path::line(Point::new(south.0, south.1), Point::new(north.0, north.1)),
+            Stroke::default()
+                .with_color(Color::from_rgb(0.55, 0.63, 0.72))
+                .with_width(2.0),
+        );
+        let label_pos = view.world_to_screen((main_south.x_nm - 0.015, 0.0), canvas_size);
+        frame.fill_text(Text {
+            content: "MAIN".into(),
+            position: Point::new(label_pos.0 - 24.0, label_pos.1),
+            color: taxiway_label_color,
+            size: 11.0.into(),
+            ..Text::default()
+        });
+    }
+
+    for (exit_name, label) in [
+        ("exit_a_to_main", "1"),
+        ("exit_b_to_main", "2"),
+        ("exit_c_to_main", "3"),
+        ("exit_d_to_main", "4"),
+    ] {
+        let Some(exit) = lookup_named(&sector.spawn_points, exit_name) else { continue };
+        let start = view.world_to_screen((0.0, exit.y_nm), canvas_size);
+        let end = view.world_to_screen((exit.x_nm, exit.y_nm), canvas_size);
+        frame.stroke(
+            &Path::line(Point::new(start.0, start.1), Point::new(end.0, end.1)),
+            Stroke::default()
+                .with_color(Color::from_rgb(0.55, 0.63, 0.72))
+                .with_width(1.5),
+        );
+        let label_pos = view.world_to_screen((exit.x_nm * 0.4, exit.y_nm + 0.015), canvas_size);
+        frame.fill_text(Text {
+            content: label.into(),
+            position: Point::new(label_pos.0 - 4.0, label_pos.1),
+            color: taxiway_label_color,
+            size: 11.0.into(),
+            ..Text::default()
+        });
+    }
+
+    for stand_index in 1..=10 {
+        let stand_name = format!("stand_{stand_index}");
+        let Some(stand) = lookup_named(&sector.spawn_points, &stand_name) else { continue };
+        let stand_screen = view.world_to_screen((stand.x_nm, stand.y_nm), canvas_size);
+        let stop_line = view.world_to_screen((main_taxiway_x, stand.y_nm), canvas_size);
+        frame.stroke(
+            &Path::line(
+                Point::new(stand_screen.0, stand_screen.1),
+                Point::new(stop_line.0, stop_line.1),
+            ),
+            Stroke::default()
+                .with_color(Color::from_rgb(0.55, 0.63, 0.72))
+                .with_width(1.3),
+        );
+        frame.fill(
+            &Path::circle(Point::new(stand_screen.0, stand_screen.1), 3.5),
+            Color::from_rgb(0.45, 0.52, 0.60),
+        );
+        frame.fill_text(Text {
+            content: stand_index.to_string(),
+            position: Point::new(stand_screen.0 - 18.0, stand_screen.1 + 4.0),
+            color: Color::from_rgb(0.84, 0.86, 0.90),
+            size: 10.0.into(),
+            ..Text::default()
+        });
+    }
+
+    if let (Some(first), Some(last)) = (
+        lookup_named(&sector.spawn_points, "stand_1"),
+        lookup_named(&sector.spawn_points, "stand_10"),
+    ) {
+        let top_left = view.world_to_screen((first.x_nm - 0.25, last.y_nm + 0.18), canvas_size);
+        let bottom_right =
+            view.world_to_screen((first.x_nm + 0.25, first.y_nm - 0.18), canvas_size);
+        frame.stroke(
+            &Path::rectangle(
+                Point::new(top_left.0, top_left.1),
+                iced::Size::new(bottom_right.0 - top_left.0, bottom_right.1 - top_left.1),
+            ),
+            Stroke::default()
+                .with_color(Color::from_rgb(0.38, 0.44, 0.50))
+                .with_width(1.0),
+        );
     }
 }
 
@@ -254,30 +373,89 @@ fn draw_aircraft(
             SquawkMode::Standby => Color::from_rgb(1.0, 1.0, 1.0),
             SquawkMode::Charlie => Color::from_rgb(0.3, 0.9, 0.4),
         };
-        frame.stroke(
-            &Path::rectangle(Point::new(sx + 7.0, sy - 28.0), iced::Size::new(100.0, 26.0)),
-            Stroke::default().with_color(frame_color).with_width(1.0),
-        );
-        let label = if ac.assumed_by_student || is_focused {
-            format!(
-                "{} {}\n{} ALT {:.0}/{:.0}",
-                ac.callsign,
-                ac.aircraft_type,
-                ac.next_waypoint.clone().unwrap_or_else(|| "-".into()),
-                ac.altitude_ft,
-                ac.assigned_altitude_ft.unwrap_or_default()
+        let (label, label_width, label_height) = if ac.assumed_by_student || is_focused {
+            let next_waypoint = ac.next_waypoint.clone().unwrap_or_else(|| "-".into());
+            let assigned_altitude = ac.assigned_altitude_ft
+                .map(|value| format!("A{:03}", altitude_to_a_format(value as f32)))
+                .unwrap_or_else(|| "---".into());
+            (
+                format!(
+                    "{}  {}|WPT {}|CUR A{:03}|ASG {}",
+                    ac.callsign,
+                    ac.aircraft_type,
+                    next_waypoint,
+                    altitude_to_a_format(ac.altitude_ft),
+                    assigned_altitude,
+                ),
+                168.0,
+                48.0,
             )
         } else {
-            ac.callsign.clone()
+            (ac.callsign.clone(), 92.0, 18.0)
         };
-        frame.fill_text(Text {
-            content: label,
-            position: Point::new(sx + 9.0, sy - 14.0),
-            color: Color::from_rgb(0.9, 0.92, 1.0),
-            size: 11.0.into(),
-            ..Text::default()
-        });
+        frame.fill(
+            &Path::rectangle(
+                Point::new(sx + 7.0, sy - label_height + 2.0),
+                iced::Size::new(label_width, label_height),
+            ),
+            Color::from_rgba(0.10, 0.12, 0.16, 0.88),
+        );
+        frame.stroke(
+            &Path::rectangle(
+                Point::new(sx + 7.0, sy - label_height + 2.0),
+                iced::Size::new(label_width, label_height),
+            ),
+            Stroke::default().with_color(frame_color).with_width(1.0),
+        );
+        if ac.assumed_by_student || is_focused {
+            let mut lines = label.split('|');
+            let line1 = lines.next().unwrap_or_default();
+            let line2 = lines.next().unwrap_or_default();
+            let line3_left = lines.next().unwrap_or_default();
+            let line3_right = lines.next().unwrap_or_default();
+
+            frame.fill_text(Text {
+                content: line1.into(),
+                position: Point::new(sx + 11.0, sy - label_height + 15.0),
+                color: Color::from_rgb(0.9, 0.92, 1.0),
+                size: 11.0.into(),
+                ..Text::default()
+            });
+            frame.fill_text(Text {
+                content: line2.into(),
+                position: Point::new(sx + 11.0, sy - label_height + 28.0),
+                color: Color::from_rgb(0.9, 0.92, 1.0),
+                size: 11.0.into(),
+                ..Text::default()
+            });
+            frame.fill_text(Text {
+                content: line3_left.into(),
+                position: Point::new(sx + 11.0, sy - label_height + 41.0),
+                color: Color::from_rgb(0.9, 0.92, 1.0),
+                size: 11.0.into(),
+                ..Text::default()
+            });
+            frame.fill_text(Text {
+                content: line3_right.into(),
+                position: Point::new(sx + 88.0, sy - label_height + 41.0),
+                color: Color::from_rgb(0.9, 0.92, 1.0),
+                size: 11.0.into(),
+                ..Text::default()
+            });
+        } else {
+            frame.fill_text(Text {
+                content: label,
+                position: Point::new(sx + 11.0, sy - 2.0),
+                color: Color::from_rgb(0.9, 0.92, 1.0),
+                size: 11.0.into(),
+                ..Text::default()
+            });
+        }
     }
+}
+
+fn altitude_to_a_format(value_ft: f32) -> i32 {
+    (value_ft / 100.0).round() as i32
 }
 
 fn draw_airborne_vector(

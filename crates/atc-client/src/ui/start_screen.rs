@@ -1,6 +1,7 @@
 //! StartScreen: server profile fields, trainer login, student join.
 
 use crate::core::command::AppCommand;
+use crate::core::state::AuthState;
 use crate::ui::app::{AtcApp, Message, StartField};
 use iced::widget::{button, column, container, horizontal_rule, row, text, text_input};
 use iced::{Center, Element, Fill, Length};
@@ -21,7 +22,7 @@ pub fn view(app: &AtcApp) -> Element<'_, Message> {
     ]
     .spacing(8);
 
-    let trainer = column![
+    let mut trainer = column![
         text("Trainer").size(18),
         labelled(
             "Magic hash",
@@ -45,6 +46,14 @@ pub fn view(app: &AtcApp) -> Element<'_, Message> {
         .spacing(8),
     ]
     .spacing(8);
+
+    if matches!(app.state.auth, AuthState::Trainer { .. }) {
+        trainer = trainer.push(
+            text("Trainer login successful.")
+                .color(iced::color!(0x3CCB72))
+                .size(14),
+        );
+    }
 
     let student = column![
         text("Student").size(18),

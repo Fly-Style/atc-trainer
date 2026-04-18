@@ -1,12 +1,18 @@
 use atc_shared::aircraft::*;
 use atc_shared::ids::AircraftId;
 use atc_shared::scenario::ScenarioFile;
+use atc_shared::sector::builtin_sector;
 use atc_shared::validation::sid_outer_fix;
 
 /// Convert a scenario aircraft definition into an initial runtime `AircraftState`.
 pub fn scenario_aircraft_to_state(
     sa: &atc_shared::scenario::ScenarioAircraft,
 ) -> AircraftState {
+    let spawn_point = builtin_sector()
+        .spawn_points
+        .into_iter()
+        .find(|point| point.name == sa.initial_spawn)
+        .map(|point| point.point);
     let controlled_by = match sa.initial_status {
         AircraftStatus::Airborne => ControlledByPosition::Twr,
         _ => ControlledByPosition::Gnd,
@@ -42,8 +48,8 @@ pub fn scenario_aircraft_to_state(
         ground_speed_kt: 0.0,
         air_speed_kt: None,
         altitude_ft: 0.0,
-        x_nm: 0.0,
-        y_nm: 0.0,
+        x_nm: spawn_point.map(|point| point.x_nm).unwrap_or(0.0),
+        y_nm: spawn_point.map(|point| point.y_nm).unwrap_or(0.0),
         trainer_profile: None,
         assumed_by_student: false,
         handed_off: false,
@@ -90,5 +96,27 @@ mod tests {
             .expect("northbound aircraft");
         assert_eq!(northbound.assigned_sid.as_deref(), Some("north1b"));
         assert_eq!(northbound.next_waypoint.as_deref(), Some("NORTH"));
+    }
+
+    #[test]
+    fn scenario_aircraft_spawn_on_named_stands() {
+        let scenario =
+            ScenarioFile::from_toml_str(include_str!("../../../docs/scenario-gnd-36-medium.toml"))
+                .expect("scenario parses");
+        let aircraft = initial_aircraft(&scenario);
+        let stand_1 = aircraft
+            .iter()
+            .find(|aircraft| aircraft.callsign == "YL-VFR")
+            .expect("stand 1 aircraft");
+        let stand_6 = aircraft
+            .iter()
+            .find(|aircraft| aircraft.callsign == "LY-ABC")
+            .expect("stand 6 aircraft");
+        assert_eq!(stand_1.current_node.as_deref(), Some("stand_1"));
+        assert_eq!(stand_1.x_nm, -0.195);
+        assert_eq!(stand_1.y_nm, -0.225);
+        assert_eq!(stand_6.current_node.as_deref(), Some("stand_6"));
+        assert_eq!(stand_6.x_nm, -0.195);
+        assert_eq!(stand_6.y_nm, 0.025);
     }
 }
