@@ -375,7 +375,7 @@ Examples:
   "status": "draft",
   "student_position_type": "gnd",
   "student_connected": false,
-  "lead_trainer_connected": true
+  "connected_trainers": 1
 }
 ```
 
@@ -397,7 +397,6 @@ Examples:
   "trainers": [
     {
       "trainer_id": "tr_01",
-      "trainer_kind": "lead_trainer",
       "connected": true
     }
   ],
@@ -499,7 +498,7 @@ Response `201`:
     "status": "draft",
     "student_position_type": null,
     "student_connected": false,
-    "lead_trainer_connected": true
+    "connected_trainers": 1
   }
 }
 ```
@@ -1541,6 +1540,5 @@ Suggested naming:
 
 These are narrower implementation details, not product-level open questions:
 
-- Should trainer login always return `lead_trainer`, or can additional trainers join as `observer_trainer` through a separate invite flow?
 - Should WebSocket `aircraft_updated` send full objects only, or support partial patch payloads later?
 - Should `TWR` be allowed to set departure runway/SID for aircraft already transferred from `GND`, or should those fields remain immutable after handoff?

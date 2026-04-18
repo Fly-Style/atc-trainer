@@ -33,11 +33,18 @@ pub async fn handle_client_event(
         (TokenSubject::Trainer { trainer_id }, ClientEvent::TrainerCommand(env)) => {
             handle_trainer_command(state, arc, trainer_id.as_str(), env.command).await
         }
-        (TokenSubject::Student { .. }, ClientEvent::StudentCommand(env)) => {
-            handle_student_command(arc, env.command)
+        (TokenSubject::Trainer { trainer_id }, ClientEvent::StudentCommand(env)) => {
+            handle_aircraft_metadata_command(
+                arc,
+                trainer_id.as_str(),
+                true,
+                env.command,
+            )
         }
-        (TokenSubject::Trainer { .. }, ClientEvent::StudentCommand(_))
-        | (TokenSubject::Student { .. }, ClientEvent::TrainerCommand(_)) => Err(AppError::Forbidden),
+        (TokenSubject::Student { .. }, ClientEvent::StudentCommand(env)) => {
+            handle_aircraft_metadata_command(arc, "student", false, env.command)
+        }
+        (TokenSubject::Student { .. }, ClientEvent::TrainerCommand(_)) => Err(AppError::Forbidden),
     }
 }
 
@@ -239,15 +246,21 @@ async fn handle_trainer_command(
     }
 }
 
-fn handle_student_command(
+fn handle_aircraft_metadata_command(
     arc: Arc<Mutex<SessionRecord>>,
+    actor_override: &str,
+    trainer_override: bool,
     command: StudentCommand,
 ) -> Result<(), AppError> {
     let mut rec = arc.lock().unwrap();
-    let actor = match rec.student_position.as_ref().map(|p| p.position_type) {
-        Some(StudentPositionType::Gnd) => "student:position_gnd",
-        Some(StudentPositionType::Twr) => "student:position_twr",
-        None => "student",
+    let actor = if trainer_override {
+        actor_override
+    } else {
+        match rec.student_position.as_ref().map(|p| p.position_type) {
+            Some(StudentPositionType::Gnd) => "student:position_gnd",
+            Some(StudentPositionType::Twr) => "student:position_twr",
+            None => actor_override,
+        }
     };
     match command {
         StudentCommand::AssumeAircraft { aircraft_id } => {
@@ -265,7 +278,7 @@ fn handle_student_command(
         }
         StudentCommand::UpdateAircraft { aircraft_id, changes } => {
             let idx = aircraft_index(&rec, &aircraft_id)?;
-            if !rec.aircraft[idx].assumed_by_student {
+            if !trainer_override && !rec.aircraft[idx].assumed_by_student {
                 return Err(AppError::Forbidden);
             }
             let position_type = rec.student_position.as_ref().map(|position| position.position_type);
@@ -573,8 +586,10 @@ mod tests {
     #[test]
     fn gnd_assume_clears_assigned_runway() {
         let arc = sample_record(StudentPositionType::Gnd);
-        handle_student_command(
+        handle_aircraft_metadata_command(
             arc.clone(),
+            "student",
+            false,
             StudentCommand::AssumeAircraft {
                 aircraft_id: AircraftId::new("ac_t"),
             },
@@ -584,6 +599,35 @@ mod tests {
         let aircraft = &rec.aircraft[0];
         assert!(aircraft.assumed_by_student);
         assert_eq!(aircraft.assigned_runway, None);
+    }
+
+    #[test]
+    fn trainer_can_update_unassumed_aircraft_metadata() {
+        let arc = sample_record(StudentPositionType::Gnd);
+        handle_aircraft_metadata_command(
+            arc.clone(),
+            "trainer:test",
+            true,
+            StudentCommand::UpdateAircraft {
+                aircraft_id: AircraftId::new("ac_t"),
+                changes: StudentAircraftChanges {
+                    status: Some(AircraftStatus::Taxi),
+                    assigned_runway: Some(Some("36".into())),
+                    assigned_sid: Some(Some("north1b".into())),
+                    assigned_squawk: Some(Some("4123".into())),
+                    assigned_altitude_ft: Some(Some(4000)),
+                },
+            },
+        )
+        .expect("trainer update works");
+        let rec = arc.lock().unwrap();
+        let aircraft = &rec.aircraft[0];
+        assert_eq!(aircraft.status, AircraftStatus::Taxi);
+        assert_eq!(aircraft.assigned_runway.as_deref(), Some("36"));
+        assert_eq!(aircraft.assigned_sid.as_deref(), Some("north1b"));
+        assert_eq!(aircraft.next_waypoint.as_deref(), Some("NORTH"));
+        assert_eq!(aircraft.assigned_squawk.as_deref(), Some("4123"));
+        assert_eq!(aircraft.assigned_altitude_ft, Some(4000));
     }
 
     #[tokio::test]

@@ -3,8 +3,7 @@
 //! focuses an aircraft. Pure rendering pulled from `core::state::ViewState`.
 
 use crate::core::command::AppCommand;
-use crate::ui::app::Message;
-use crate::ui::app::AtcApp;
+use crate::ui::app::{AtcApp, Message};
 use atc_shared::aircraft::{AircraftState, SquawkMode, TargetAltitude};
 use atc_shared::role::Role;
 use atc_shared::sector::{CtrShape, NamedPoint, SectorMetadata, WorldPoint};
@@ -58,6 +57,21 @@ impl<'a> canvas::Program<Message> for SectorCanvas<'a> {
                         Some(Message::Command(AppCommand::FocusAircraft(id))),
                     );
                 }
+                if matches!(self.app.state.auth.role(), Some(Role::Trainer))
+                    && self.app.state.view.focused_aircraft.is_some()
+                    && self.app.trainer_form.draft_mode_active
+                    && !self.app.trainer_form.path_geometry_finished
+                {
+                    let (x_nm, y_nm) = self
+                        .app
+                        .state
+                        .view
+                        .screen_to_world((pos.x, pos.y), canvas_size);
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::CanvasDraftPointAdded { x_nm, y_nm }),
+                    );
+                }
                 state.dragging = Some(pos);
                 (canvas::event::Status::Captured, None)
             }
@@ -85,8 +99,16 @@ impl<'a> canvas::Program<Message> for SectorCanvas<'a> {
                     mouse::ScrollDelta::Lines { y, .. } => y,
                     mouse::ScrollDelta::Pixels { y, .. } => y / 20.0,
                 };
-                let cmd = if dy > 0.0 { AppCommand::ZoomIn } else { AppCommand::ZoomOut };
-                (canvas::event::Status::Captured, Some(Message::Command(cmd)))
+                (
+                    canvas::event::Status::Captured,
+                    Some(Message::ZoomAtCursor {
+                        screen_x: pos.x,
+                        screen_y: pos.y,
+                        canvas_width: bounds.width,
+                        canvas_height: bounds.height,
+                        zoom_in: dy > 0.0,
+                    }),
+                )
             }
             _ => (canvas::event::Status::Ignored, None),
         }
@@ -108,7 +130,14 @@ impl<'a> canvas::Program<Message> for SectorCanvas<'a> {
             let Some(sector) = self.app.state.sector.as_ref() else {
                 return;
             };
-            draw_sector(frame, view, canvas_size, sector);
+            let active_runway = self
+                .app
+                .state
+                .session
+                .as_ref()
+                .map(|session| session.state.active_runway.as_str())
+                .unwrap_or(sector.active_runway.as_str());
+            draw_sector(frame, view, canvas_size, sector, active_runway);
             if let Some(session) = self.app.state.session.as_ref() {
                 if matches!(self.app.state.auth.role(), Some(Role::Trainer)) {
                     draw_trainer_paths(frame, view, canvas_size, &session.state.aircraft);
@@ -125,6 +154,7 @@ fn draw_sector(
     view: &crate::core::state::ViewState,
     canvas_size: (f32, f32),
     sector: &SectorMetadata,
+    active_runway: &str,
 ) {
     // CTR boundary.
     match sector.ctr {
@@ -163,7 +193,7 @@ fn draw_sector(
     // ILS localiser: project from threshold opposite to the runway course
     // (i.e., out toward where approach traffic is coming from).
     for ils in &sector.ils {
-        if !ils.visible_when_active {
+        if !ils.visible_when_active || ils.runway != active_runway {
             continue;
         }
         let Some(origin) = lookup_named(&sector.spawn_points, &format!("hold_{}", ils.runway)) else { continue };
@@ -261,7 +291,10 @@ fn draw_airborne_vector(
     }
     let speed = aircraft.air_speed_kt.unwrap_or(aircraft.ground_speed_kt);
     let length_nm = speed / 60.0;
-    let target = (aircraft.x_nm, aircraft.y_nm + length_nm);
+    let Some((dx, dy)) = vector_direction(aircraft) else {
+        return;
+    };
+    let target = (aircraft.x_nm + dx * length_nm, aircraft.y_nm + dy * length_nm);
     let start = view.world_to_screen((aircraft.x_nm, aircraft.y_nm), canvas_size);
     let end = view.world_to_screen(target, canvas_size);
     frame.stroke(
@@ -270,6 +303,35 @@ fn draw_airborne_vector(
             .with_color(Color::from_rgb(0.3, 0.9, 0.4))
             .with_width(1.0),
     );
+}
+
+fn vector_direction(aircraft: &AircraftState) -> Option<(f32, f32)> {
+    if let Some(active_path) = &aircraft.active_path {
+        for point in &active_path.points {
+            let dx = point.x_nm - aircraft.x_nm;
+            let dy = point.y_nm - aircraft.y_nm;
+            let magnitude = (dx * dx + dy * dy).sqrt();
+            if magnitude > 0.01 {
+                return Some((dx / magnitude, dy / magnitude));
+            }
+        }
+    }
+
+    if let Some(next_waypoint) = aircraft.next_waypoint.as_deref() {
+        match next_waypoint {
+            "NORTH" => return Some((0.0, 1.0)),
+            "EAST" => return Some((1.0, 0.0)),
+            "SOUTH" => return Some((0.0, -1.0)),
+            "WEST" => return Some((-1.0, 0.0)),
+            _ => {}
+        }
+    }
+
+    match aircraft.assigned_runway.as_deref() {
+        Some("18") => Some((0.0, -1.0)),
+        Some("36") => Some((0.0, 1.0)),
+        _ => None,
+    }
 }
 
 fn draw_trainer_paths(

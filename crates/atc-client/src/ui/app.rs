@@ -18,6 +18,9 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub enum Message {
     Command(AppCommand),
+    RequestConfirmation(ConfirmationKind),
+    ConfirmAction,
+    CancelConfirmation,
     HttpDone(Result<HttpOutcome, String>),
     WsEvent(ServerEvent),
     WsReady(WsCommandSender),
@@ -25,10 +28,28 @@ pub enum Message {
     StartFieldChanged(StartField, String),
     SessionFieldChanged(SessionField, String),
     TrainerFieldChanged(TrainerField, String),
-    AddDraftPoint,
+    BeginDraftPath,
+    CanvasDraftPointAdded { x_nm: f32, y_nm: f32 },
     UndoDraftPoint,
     FinishPathing,
     ClearDraftPath,
+    DraftPointFieldChanged {
+        index: usize,
+        field: DraftPointField,
+        value: String,
+    },
+    ZoomAtCursor {
+        screen_x: f32,
+        screen_y: f32,
+        canvas_width: f32,
+        canvas_height: f32,
+        zoom_in: bool,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ConfirmationKind {
+    RemoveAircraft { aircraft_id: atc_shared::ids::AircraftId },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -59,10 +80,12 @@ pub enum TrainerField {
     Template,
     SquawkMode,
     InitialState,
-    PointX,
-    PointY,
-    PointSpeed,
-    PointAltitude,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DraftPointField {
+    Speed,
+    Altitude,
 }
 
 #[derive(Default)]
@@ -79,6 +102,7 @@ pub struct AtcApp {
     pub ws_commands: Option<WsCommandSender>,
     pub session_form: SessionFormState,
     pub trainer_form: TrainerFormState,
+    pub pending_confirmation: Option<ConfirmationKind>,
 }
 
 impl Default for AtcApp {
@@ -93,6 +117,7 @@ impl Default for AtcApp {
             ws_commands: None,
             session_form: SessionFormState::default(),
             trainer_form: TrainerFormState::default(),
+            pending_confirmation: None,
         }
     }
 }
@@ -115,11 +140,8 @@ pub struct TrainerFormState {
     pub template: String,
     pub squawk_mode: String,
     pub initial_state: String,
-    pub point_x: String,
-    pub point_y: String,
-    pub point_speed: String,
-    pub point_altitude: String,
     pub draft_points: Vec<PathPoint>,
+    pub draft_mode_active: bool,
     pub path_geometry_finished: bool,
 }
 
@@ -134,11 +156,8 @@ impl Default for TrainerFormState {
             template: "ifr_a320".into(),
             squawk_mode: "standby".into(),
             initial_state: "new".into(),
-            point_x: String::new(),
-            point_y: String::new(),
-            point_speed: String::new(),
-            point_altitude: String::new(),
             draft_points: Vec::new(),
+            draft_mode_active: false,
             path_geometry_finished: false,
         }
     }
@@ -155,6 +174,24 @@ impl AtcApp {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::RequestConfirmation(kind) => {
+                self.pending_confirmation = Some(kind);
+                Task::none()
+            }
+            Message::ConfirmAction => {
+                let Some(kind) = self.pending_confirmation.take() else {
+                    return Task::none();
+                };
+                match kind {
+                    ConfirmationKind::RemoveAircraft { aircraft_id } => {
+                        self.dispatch(AppCommand::RemoveAircraft { aircraft_id })
+                    }
+                }
+            }
+            Message::CancelConfirmation => {
+                self.pending_confirmation = None;
+                Task::none()
+            }
             Message::StartFieldChanged(field, value) => {
                 match field {
                     StartField::HttpBase => self.state.server.http_base = value,
@@ -185,15 +222,17 @@ impl AtcApp {
                     TrainerField::Template => self.trainer_form.template = value,
                     TrainerField::SquawkMode => self.trainer_form.squawk_mode = value,
                     TrainerField::InitialState => self.trainer_form.initial_state = value,
-                    TrainerField::PointX => self.trainer_form.point_x = value,
-                    TrainerField::PointY => self.trainer_form.point_y = value,
-                    TrainerField::PointSpeed => self.trainer_form.point_speed = value,
-                    TrainerField::PointAltitude => self.trainer_form.point_altitude = value,
                 }
                 Task::none()
             }
-            Message::AddDraftPoint => {
-                self.add_draft_point();
+            Message::BeginDraftPath => {
+                self.trainer_form.draft_mode_active = true;
+                self.trainer_form.path_geometry_finished = false;
+                self.trainer_form.draft_points.clear();
+                Task::none()
+            }
+            Message::CanvasDraftPointAdded { x_nm, y_nm } => {
+                self.add_draft_point(x_nm, y_nm);
                 Task::none()
             }
             Message::UndoDraftPoint => {
@@ -201,12 +240,60 @@ impl AtcApp {
                 Task::none()
             }
             Message::FinishPathing => {
+                self.trainer_form.draft_mode_active = false;
                 self.trainer_form.path_geometry_finished = true;
                 Task::none()
             }
             Message::ClearDraftPath => {
                 self.trainer_form.draft_points.clear();
+                self.trainer_form.draft_mode_active = false;
                 self.trainer_form.path_geometry_finished = false;
+                Task::none()
+            }
+            Message::DraftPointFieldChanged { index, field, value } => {
+                match field {
+                    DraftPointField::Speed => {
+                        if let Some(point) = self.trainer_form.draft_points.get_mut(index) {
+                            point.target_speed_kt = value.trim().parse::<f32>().unwrap_or_default();
+                        }
+                    }
+                    DraftPointField::Altitude => {
+                        if let Some(point) = self.trainer_form.draft_points.get_mut(index) {
+                            point.target_altitude = match value.trim() {
+                                "" | "gnd" | "GND" => TargetAltitude::Gnd,
+                                other => TargetAltitude::MslFt {
+                                    value_ft: other.parse::<i32>().unwrap_or_default(),
+                                },
+                            };
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::ZoomAtCursor {
+                screen_x,
+                screen_y,
+                canvas_width,
+                canvas_height,
+                zoom_in,
+            } => {
+                let canvas_size = (canvas_width, canvas_height);
+                let world_before = self
+                    .state
+                    .view
+                    .screen_to_world((screen_x, screen_y), canvas_size);
+                if zoom_in {
+                    self.state.view.zoom_in();
+                } else {
+                    self.state.view.zoom_out();
+                }
+                let world_after = self
+                    .state
+                    .view
+                    .screen_to_world((screen_x, screen_y), canvas_size);
+                self.state
+                    .view
+                    .pan_by_nm(world_before.0 - world_after.0, world_before.1 - world_after.1);
                 Task::none()
             }
             Message::Command(cmd) => {
@@ -398,28 +485,15 @@ impl AtcApp {
         }
     }
 
-    fn add_draft_point(&mut self) {
+    fn add_draft_point(&mut self, x_nm: f32, y_nm: f32) {
         let seq = self.trainer_form.draft_points.len() as u32 + 1;
-        let x_nm = self.trainer_form.point_x.parse::<f32>().unwrap_or_default();
-        let y_nm = self.trainer_form.point_y.parse::<f32>().unwrap_or_default();
-        let target_speed_kt = self.trainer_form.point_speed.parse::<f32>().unwrap_or_default();
-        let target_altitude = match self.trainer_form.point_altitude.trim() {
-            "" | "gnd" | "GND" => TargetAltitude::Gnd,
-            other => TargetAltitude::MslFt {
-                value_ft: other.parse::<i32>().unwrap_or_default(),
-            },
-        };
         self.trainer_form.draft_points.push(PathPoint {
             seq,
             x_nm,
             y_nm,
-            target_speed_kt,
-            target_altitude,
+            target_speed_kt: 0.0,
+            target_altitude: TargetAltitude::Gnd,
         });
-        self.trainer_form.point_x.clear();
-        self.trainer_form.point_y.clear();
-        self.trainer_form.point_speed.clear();
-        self.trainer_form.point_altitude.clear();
     }
 
     pub fn build_student_changes(&self) -> StudentAircraftChanges {

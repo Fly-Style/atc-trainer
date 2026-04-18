@@ -3,7 +3,7 @@
 
 use crate::core::command::AppCommand;
 use crate::core::state::AuthState;
-use crate::ui::app::{AtcApp, Message, SessionField, TrainerField};
+use crate::ui::app::{AtcApp, ConfirmationKind, DraftPointField, Message, SessionField, TrainerField};
 use crate::ui::sector_canvas::SectorCanvas;
 use atc_shared::role::Role;
 use atc_shared::session::SessionStatus;
@@ -241,9 +241,7 @@ fn trainer_toolbox(app: &AtcApp) -> Element<'_, Message> {
                         aircraft_id: aircraft_id.clone(),
                         target_speed_kt: app.trainer_form.speed.parse().unwrap_or_default(),
                     })),
-                    button("Remove").on_press(Message::Command(AppCommand::RemoveAircraft {
-                        aircraft_id: aircraft_id.clone(),
-                    })),
+                    remove_aircraft_controls(app, &aircraft_id),
                 ]
                 .spacing(6),
             )
@@ -257,21 +255,12 @@ fn trainer_toolbox(app: &AtcApp) -> Element<'_, Message> {
                 .spacing(6),
             )
             .push(text("Draft path").size(14))
-            .push(row![
-                trainer_input("PX", &app.trainer_form.point_x, TrainerField::PointX),
-                trainer_input("PY", &app.trainer_form.point_y, TrainerField::PointY),
-            ]
-            .spacing(6))
-            .push(row![
-                trainer_input("PSpd", &app.trainer_form.point_speed, TrainerField::PointSpeed),
-                trainer_input("PAlt/GND", &app.trainer_form.point_altitude, TrainerField::PointAltitude),
-            ]
-            .spacing(6))
             .push(
                 row![
-                    button("Add point").on_press(Message::AddDraftPoint),
+                    button("Draft path").on_press(Message::BeginDraftPath),
                     button("Undo").on_press(Message::UndoDraftPoint),
                     button("Finish pathing").on_press(Message::FinishPathing),
+                    button("Clear").on_press(Message::ClearDraftPath),
                 ]
                 .spacing(6),
             )
@@ -315,17 +304,72 @@ fn trainer_toolbox(app: &AtcApp) -> Element<'_, Message> {
 
 fn path_points_list(app: &AtcApp) -> Element<'_, Message> {
     let mut points = Column::new().spacing(4);
-    for point in &app.trainer_form.draft_points {
+    if app.trainer_form.draft_mode_active {
+        points = points.push(text("Click on the radar to append path points."));
+    } else if !app.trainer_form.path_geometry_finished {
+        points = points.push(text("Start draft mode to place path points on the radar."));
+    }
+    for (index, point) in app.trainer_form.draft_points.iter().enumerate() {
         let altitude = match point.target_altitude {
             atc_shared::aircraft::TargetAltitude::Gnd => "GND".to_string(),
             atc_shared::aircraft::TargetAltitude::MslFt { value_ft } => value_ft.to_string(),
         };
-        points = points.push(text(format!(
-            "#{}  x={:.1} y={:.1}  spd={:.0} alt={}",
-            point.seq, point.x_nm, point.y_nm, point.target_speed_kt, altitude
-        )));
+        if app.trainer_form.path_geometry_finished {
+            points = points.push(
+                row![
+                    text(format!("#{} x={:.1} y={:.1}", point.seq, point.x_nm, point.y_nm)).size(12),
+                    text_input("speed", &format!("{:.0}", point.target_speed_kt))
+                        .on_input(move |value| Message::DraftPointFieldChanged {
+                            index,
+                            field: DraftPointField::Speed,
+                            value,
+                        })
+                        .padding(4)
+                        .width(Length::Fixed(70.0)),
+                    text_input("alt/GND", &altitude)
+                        .on_input(move |value| Message::DraftPointFieldChanged {
+                            index,
+                            field: DraftPointField::Altitude,
+                            value,
+                        })
+                        .padding(4)
+                        .width(Length::Fixed(90.0)),
+                ]
+                .spacing(6),
+            );
+        } else {
+            points = points.push(text(format!(
+                "#{}  x={:.1} y={:.1}",
+                point.seq, point.x_nm, point.y_nm
+            )));
+        }
     }
     points.into()
+}
+
+fn remove_aircraft_controls<'a>(
+    app: &'a AtcApp,
+    aircraft_id: &atc_shared::ids::AircraftId,
+) -> Element<'a, Message> {
+    match &app.pending_confirmation {
+        Some(ConfirmationKind::RemoveAircraft { aircraft_id: pending_id })
+            if pending_id == aircraft_id =>
+        {
+            row![
+                text("Confirm remove?").size(12),
+                button("Confirm").on_press(Message::ConfirmAction),
+                button("Cancel").on_press(Message::CancelConfirmation),
+            ]
+            .spacing(6)
+            .into()
+        }
+        _ => button("Remove").on_press(Message::RequestConfirmation(
+            ConfirmationKind::RemoveAircraft {
+                aircraft_id: aircraft_id.clone(),
+            },
+        ))
+        .into(),
+    }
 }
 
 fn labelled_input<'a>(label: &'a str, value: &'a str, field: SessionField) -> Element<'a, Message> {
