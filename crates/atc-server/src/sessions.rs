@@ -9,7 +9,7 @@ use atc_shared::role::Role;
 use atc_shared::scenario::ScenarioFile;
 use atc_shared::sector::builtin_sector;
 use atc_shared::session::*;
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use time::OffsetDateTime;
@@ -156,7 +156,7 @@ impl SessionRegistry {
 }
 
 pub fn rand_suffix(n: usize) -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     Alphanumeric.sample_string(&mut rng, n)
 }
 

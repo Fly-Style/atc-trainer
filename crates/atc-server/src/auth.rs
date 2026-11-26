@@ -2,7 +2,7 @@ use crate::error::AppError;
 use atc_shared::ids::{SessionId, StudentToken, TrainerId, TrainerToken};
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -65,7 +65,7 @@ impl TokenStore {
 }
 
 fn random_token(prefix: &str) -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let tail = Alphanumeric.sample_string(&mut rng, 20);
     format!("{prefix}{tail}")
 }
