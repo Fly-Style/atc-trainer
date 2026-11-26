@@ -18,6 +18,21 @@ pub struct Airport {
     pub id: String,
     pub lines: Vec<Line>,
     pub fills: Vec<Fill>,
+    pub labels: Vec<Label>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Label {
+    pub text: String,
+    /// East and north offsets in metres, relative to the airport origin.
+    pub position: [f64; 2],
+    pub kind: LabelKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelKind {
+    Runway,
+    Stand,
 }
 
 /// Endpoints and vertices are [east, north] in metres from a local airport origin.
@@ -79,6 +94,7 @@ pub fn load(path: &Path) -> Result<Sector, AuroraError> {
     let mut roots = Vec::new();
     let mut references = Vec::new();
     let mut definitions = Vec::new();
+    let mut label_records = Vec::new();
     let mut section = "";
     let mut info_rows = 0;
 
@@ -101,6 +117,11 @@ pub fn load(path: &Path) -> Result<Sector, AuroraError> {
         }
         if section.eq_ignore_ascii_case("[DEFINE]") {
             definitions.push((line, record));
+        }
+        if section.eq_ignore_ascii_case("[RUNWAY]") {
+            label_records.push((LabelKind::Runway, line, record));
+        } else if section.eq_ignore_ascii_case("[GATES]") {
+            label_records.push((LabelKind::Stand, line, record));
         }
         let kind = if section.eq_ignore_ascii_case("[GEO]") {
             Geometry::Linework
@@ -152,6 +173,7 @@ pub fn load(path: &Path) -> Result<Sector, AuroraError> {
                 id,
                 lines,
                 fills: Vec::new(),
+                labels: Vec::new(),
             });
         }
     }
@@ -172,10 +194,130 @@ pub fn load(path: &Path) -> Result<Sector, AuroraError> {
                 .extend(parse_fills(&source, &read(&source)?, &colors)?);
         }
     }
+    load_labels(&package, &roots, path, label_records, &mut airports)?;
     for airport in &mut airports {
         project(airport);
     }
     Ok(Sector { airports })
+}
+
+fn load_labels(
+    package: &Path,
+    roots: &[PathBuf],
+    manifest: &Path,
+    declarations: Vec<(LabelKind, usize, &str)>,
+    airports: &mut [Airport],
+) -> Result<(), AuroraError> {
+    for (kind, line, record) in declarations {
+        let include = record
+            .trim_end_matches(';')
+            .split_once(';')
+            .filter(|(tag, value)| tag.trim().eq_ignore_ascii_case("F") && !value.contains(';'));
+        if let Some((_, value)) = include {
+            let reference = relative_path(value.trim(), manifest, line)?;
+            if let Some(source) = optional_label_file(package, roots, &reference, manifest)? {
+                if let Some(contents) = read_optional_label_file(&source) {
+                    for (_, row) in records(&contents) {
+                        attach_labels(airports, kind, row);
+                    }
+                }
+            }
+        } else {
+            attach_labels(airports, kind, record);
+        }
+    }
+
+    // Aurora discovers ICAO.gts in the include roots even without a GATES entry.
+    for airport in airports {
+        let icao = &airport.id;
+        let lowercase = icao.to_ascii_lowercase();
+        let names = [
+            format!("{lowercase}.gts"),
+            format!("{icao}.gts"),
+            format!("{icao}.GTS"),
+            format!("{lowercase}.GTS"),
+        ];
+        for name in names {
+            if let Some(source) = optional_label_file(package, roots, Path::new(&name), manifest)? {
+                if let Some(contents) = read_optional_label_file(&source) {
+                    for (_, row) in records(&contents) {
+                        attach_labels(std::slice::from_mut(airport), LabelKind::Stand, row);
+                    }
+                }
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_optional_label_file(path: &Path) -> Option<String> {
+    read(path).ok()
+}
+
+fn optional_label_file(
+    package: &Path,
+    roots: &[PathBuf],
+    reference: &Path,
+    manifest: &Path,
+) -> Result<Option<PathBuf>, AuroraError> {
+    match resolve_include(package, roots, reference, false, manifest) {
+        Ok(source) => Ok(Some(source)),
+        Err(AuroraError::MissingInclude { .. }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn attach_labels(airports: &mut [Airport], kind: LabelKind, record: &str) {
+    let fields: Vec<_> = record.split(';').map(str::trim).collect();
+    match (kind, fields.as_slice()) {
+        (LabelKind::Runway, [icao, first, second, _, _, _, _, lat1, lon1, lat2, lon2, ..]) => {
+            for airport in airports
+                .iter_mut()
+                .filter(|airport| matches_icao(airport, icao))
+            {
+                for (name, lat, lon) in [(first, lat1, lon1), (second, lat2, lon2)] {
+                    let name = name.split_ascii_whitespace().collect::<String>();
+                    push_label(airport, kind, &name, lat, lon);
+                }
+            }
+        }
+        (LabelKind::Stand, [name, icao, lat, lon, ..]) => {
+            for airport in airports
+                .iter_mut()
+                .filter(|airport| matches_icao(airport, icao))
+            {
+                push_label(airport, kind, name, lat, lon);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn matches_icao(airport: &Airport, icao: &str) -> bool {
+    if airport.id.eq_ignore_ascii_case(icao) {
+        return true;
+    }
+    // Airport layout variants can append a suffix to the geometry file's ICAO.
+    airport.id.split_once('_').is_some_and(|(prefix, _)| {
+        prefix.len() == 4
+            && prefix.bytes().all(|byte| byte.is_ascii_alphabetic())
+            && prefix.eq_ignore_ascii_case(icao)
+    })
+}
+
+fn push_label(airport: &mut Airport, kind: LabelKind, name: &str, lat: &str, lon: &str) {
+    let Some(position) = coordinates(lat, lon).filter(|_| !name.is_empty()) else {
+        return;
+    };
+    let label = Label {
+        text: name.to_owned(),
+        position,
+        kind,
+    };
+    if !airport.labels.contains(&label) {
+        airport.labels.push(label);
+    }
 }
 
 fn airport_id(reference: &Path) -> String {
@@ -471,6 +613,9 @@ fn project(airport: &mut Airport) {
             *point = project(*point);
         }
     }
+    for label in &mut airport.labels {
+        label.position = project(label.position);
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -532,6 +677,57 @@ mod tests {
     }
 
     #[test]
+    fn loads_runway_thresholds_and_stands_in_the_same_coordinates_as_linework() {
+        let (directory, manifest) = fixture();
+        let include = directory.path().join("Include/Fixture");
+        let mut data = fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("zzxy.", "zzxy_layout.");
+        let airport_dir = include.join("Airports");
+        for extension in ["geo", "tfl"] {
+            fs::rename(
+                airport_dir.join(format!("zzxy.{extension}")),
+                airport_dir.join(format!("zzxy_layout.{extension}")),
+            )
+            .unwrap();
+        }
+        data.push_str(concat!(
+            "[RUNWAY]\r\nF;/thresholds.rwy\r\nF;/unavailable.rwy\r\n",
+            "ZZXY;03;21;0;0;030;210;-33;-71;-32.999;-71;\r\n",
+            "[GATES]\r\nF;ZZXY_LAYOUT.GTS\r\nF;zzxy;-33;-70.999;H;\r\n",
+        ));
+        fs::write(&manifest, data).unwrap();
+        fs::write(
+            include.join("thresholds.rwy"),
+            "zzxy;01 L;19 R;0;0;010;190;-33;-71;-32.999;-71;\r\n",
+        )
+        .unwrap();
+        fs::write(
+            include.join("ZZXY_LAYOUT.GTS"),
+            "3;ZZXY;-33;-71;\r\n3;ZZXY;-32.999;-71;\r\n",
+        )
+        .unwrap();
+
+        let sector = load(&manifest).unwrap();
+        let airport = &sector.airports[0];
+        assert_eq!(airport.id, "ZZXY_LAYOUT");
+        let labels: Vec<_> = airport
+            .labels
+            .iter()
+            .map(|label| (label.text.as_str(), label.kind, label.position))
+            .collect();
+        let line = &airport.lines[0];
+        assert_eq!(labels.len(), 7);
+        assert!(labels.contains(&("01L", LabelKind::Runway, line.start)));
+        assert!(labels.contains(&("19R", LabelKind::Runway, line.end)));
+        assert!(labels.contains(&("03", LabelKind::Runway, line.start)));
+        assert!(labels.contains(&("21", LabelKind::Runway, line.end)));
+        assert!(labels.contains(&("3", LabelKind::Stand, line.start)));
+        assert!(labels.contains(&("3", LabelKind::Stand, line.end)));
+        assert!(labels.contains(&("F", LabelKind::Stand, airport.fills[0].vertices[4])));
+    }
+
+    #[test]
     fn names_missing_include_and_rejects_paths_outside_package() {
         let (directory, manifest) = fixture();
         fs::remove_file(directory.path().join("Include/Fixture/Airports/zzxy.geo")).unwrap();
@@ -545,6 +741,17 @@ mod tests {
             error.contains("include path") && error.contains(".."),
             "{error}"
         );
+    }
+
+    #[test]
+    fn unreadable_optional_stand_file_does_not_hide_airport_geometry() {
+        let (directory, manifest) = fixture();
+        let stands = directory.path().join("Include/Fixture/zzxy.gts");
+        fs::write(&stands, [0xFF, 0xFE]).unwrap();
+
+        let sector = load(&manifest).unwrap();
+        assert_eq!(sector.airports[0].id, "ZZXY");
+        assert!(!sector.airports[0].lines.is_empty());
     }
 
     #[test]
@@ -569,5 +776,21 @@ mod tests {
         assert!(runway(-2_000.0..-1_000.0).count() >= 20);
         assert!(runway(-30.0..300.0).count() >= 20);
         assert!(airport.fills.iter().any(|fill| fill.color == 0x273d30));
+        let threshold = |number: &str| {
+            airport
+                .labels
+                .iter()
+                .find(|label| label.kind == LabelKind::Runway && label.text == number)
+                .unwrap()
+                .position
+        };
+        assert!(threshold("36L")[0] < threshold("36R")[0]);
+        assert!(threshold("18R")[0] < threshold("18L")[0]);
+        assert!(threshold("18L")[1] > threshold("36R")[1]);
+        assert!(threshold("18R")[1] > threshold("36L")[1]);
+        assert!(airport
+            .labels
+            .iter()
+            .any(|label| label.kind == LabelKind::Stand && label.text == "100"));
     }
 }
