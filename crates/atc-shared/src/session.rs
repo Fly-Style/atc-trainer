@@ -53,6 +53,7 @@ pub struct SessionState {
     pub session_hash: SessionHash,
     pub status: SessionStatus,
     pub sector_id: SectorId,
+    pub sector_name: String,
     pub student_position: Option<StudentPosition>,
     pub trainers: Vec<TrainerInfo>,
     pub aircraft: Vec<AircraftState>,

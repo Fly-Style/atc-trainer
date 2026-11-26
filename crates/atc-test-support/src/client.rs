@@ -53,12 +53,32 @@ impl TestClient {
     }
 
     pub async fn create_session(&self, name: &str) -> Result<CreateSessionResponse, HttpError> {
+        self.post_create_session(name, None).await
+    }
+
+    pub async fn create_session_with_sector(
+        &self,
+        name: &str,
+        sector: &atc_shared::sector::SectorIdentity,
+    ) -> Result<CreateSessionResponse, HttpError> {
+        self.post_create_session(name, Some(sector)).await
+    }
+
+    async fn post_create_session(
+        &self,
+        name: &str,
+        sector: Option<&atc_shared::sector::SectorIdentity>,
+    ) -> Result<CreateSessionResponse, HttpError> {
         let url = format!("{}/api/v1/sessions", self.http_base);
         let resp = self
             .http
             .post(url)
             .bearer_auth(self.trainer_token.as_ref().expect("trainer login first"))
-            .json(&CreateSessionRequest { name: name.to_string() })
+            .json(&CreateSessionRequest {
+                name: name.to_string(),
+                sector_id: sector.map(|s| s.sector_id.clone()),
+                sector_name: sector.map(|s| s.name.clone()),
+            })
             .send()
             .await?;
         parse_json(resp).await

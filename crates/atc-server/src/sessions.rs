@@ -7,7 +7,7 @@ use atc_shared::ids::*;
 use atc_shared::protocol::{HelloPayload, ServerEvent, SessionUpdatedPayload};
 use atc_shared::role::Role;
 use atc_shared::scenario::ScenarioFile;
-use atc_shared::sector::builtin_sector;
+use atc_shared::sector::{builtin_sector, SectorIdentity};
 use atc_shared::session::*;
 use rand::distr::{Alphanumeric, SampleString};
 use std::collections::HashMap;
@@ -23,6 +23,8 @@ pub struct SessionRecord {
     pub session_hash: SessionHash,
     pub name: String,
     pub status: SessionStatus,
+    pub sector_id: SectorId,
+    pub sector_name: String,
     pub student_position: Option<StudentPosition>,
     pub trainers: Vec<TrainerInfo>,
     pub aircraft: Vec<AircraftState>,
@@ -40,7 +42,8 @@ impl SessionRecord {
             name: self.name.clone(),
             session_hash: self.session_hash.clone(),
             status: self.status,
-            sector_id: builtin_sector().sector_id,
+            sector_id: self.sector_id.clone(),
+            sector_name: self.sector_name.clone(),
             student_position: self.student_position.clone(),
             trainers: self.trainers.clone(),
             aircraft: self.aircraft.clone(),
@@ -102,6 +105,7 @@ impl SessionRegistry {
         cfg: &ServerConfig,
         name: String,
         lead_trainer_id: TrainerId,
+        sector: Option<SectorIdentity>,
     ) -> Result<Arc<Mutex<SessionRecord>>, AppError> {
         let session_id = SessionId::new(format!("sess_{}", rand_suffix(8)));
         let session_hash = SessionHash::new(format!("join-{}", rand_suffix(6).to_uppercase()));
@@ -119,11 +123,18 @@ impl SessionRegistry {
             (Vec::new(), "18".to_string(), String::new())
         };
 
+        let (sector_id, sector_name) = match sector {
+            Some(identity) => (identity.sector_id, identity.name),
+            None => (builtin_sector().sector_id, "Training Airport".to_string()),
+        };
+
         let record = SessionRecord {
             session_id: session_id.clone(),
             session_hash,
             name,
             status: SessionStatus::Draft,
+            sector_id,
+            sector_name,
             student_position: None,
             trainers: vec![TrainerInfo {
                 trainer_id: lead_trainer_id,

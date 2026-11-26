@@ -4,7 +4,7 @@ use crate::error::AppError;
 use atc_shared::ids::*;
 use atc_shared::protocol::*;
 use atc_shared::role::{Role, StudentPositionType};
-use atc_shared::sector::builtin_sector;
+use atc_shared::sector::{builtin_sector, SectorIdentity};
 use atc_shared::session::{ConnectionState, SessionStatus, StudentPosition};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -43,7 +43,11 @@ pub async fn create_session(
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<CreateSessionResponse>), AppError> {
     let trainer_id = require_trainer(&state, &token)?;
-    let session_arc = state.registry.create(&state.config, req.name, trainer_id)?;
+    let sector = match (req.sector_id, req.sector_name) {
+        (Some(sector_id), Some(name)) => Some(SectorIdentity { sector_id, name }),
+        _ => None,
+    };
+    let session_arc = state.registry.create(&state.config, req.name, trainer_id, sector)?;
     let summary = session_arc.lock().unwrap().to_summary();
     Ok((StatusCode::CREATED, Json(CreateSessionResponse { session: summary })))
 }

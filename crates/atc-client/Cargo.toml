@@ -22,6 +22,7 @@ required-features = ["legacy-iced"]
 
 [dependencies]
 atc-shared = { path = "../atc-shared" }
+atc-server = { path = "../atc-server" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
@@ -35,6 +36,8 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 time = { workspace = true }
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+axum = { workspace = true }
+sha2 = { workspace = true }
 iced = { version = "0.13", features = ["canvas", "tokio", "advanced"], optional = true }
 
 [dev-dependencies]

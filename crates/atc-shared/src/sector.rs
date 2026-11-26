@@ -1,6 +1,13 @@
 use crate::ids::SectorId;
 use serde::{Deserialize, Serialize};
 
+/// Content-derived identity of a local sector package.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SectorIdentity {
+    pub sector_id: SectorId,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct WorldPoint {
     pub x_nm: f32,
