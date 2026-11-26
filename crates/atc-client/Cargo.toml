@@ -3,6 +3,10 @@ name = "atc-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+default-run = "atc-client"
+
+[features]
+legacy-iced = ["dep:iced"]
 
 [lib]
 path = "src/lib.rs"
@@ -10,6 +14,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "atc-client"
 path = "src/bin/main.rs"
+
+[[bin]]
+name = "atc-client-legacy"
+path = "src/bin/legacy.rs"
+required-features = ["legacy-iced"]
 
 [dependencies]
 atc-shared = { path = "../atc-shared" }
@@ -25,8 +34,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 time = { workspace = true }
-iced = { version = "0.13", features = ["canvas", "tokio", "advanced"] }
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+iced = { version = "0.13", features = ["canvas", "tokio", "advanced"], optional = true }
 
 [dev-dependencies]
 atc-test-support = { path = "../atc-test-support" }
+tempfile = { workspace = true }
 time = { workspace = true }

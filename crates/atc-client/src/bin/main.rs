@@ -1,15 +1,6 @@
-use atc_client::ui::AtcApp;
+use std::path::PathBuf;
 
-pub fn main() -> iced::Result {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
-    iced::application(AtcApp::title, AtcApp::update, AtcApp::view)
-        .subscription(AtcApp::subscription)
-        .theme(|_| iced::Theme::Dark)
-        .run_with(AtcApp::new)
+fn main() {
+    let path = std::env::args_os().nth(1).map(PathBuf::from);
+    atc_client::sector_viewer::run(path);
 }
