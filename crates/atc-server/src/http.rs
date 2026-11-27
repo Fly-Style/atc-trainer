@@ -104,6 +104,8 @@ pub async fn join_student(
     let position_id = position.position_id.clone();
     let position_type = position.position_type;
     let session_id = rec.session_id.clone();
+    let sector_id = rec.sector_id.clone();
+    let sector_name = rec.sector_name.clone();
     let token = state.tokens.issue_student(session_id.clone(), position_id.clone());
     rec.revision += 1;
     Ok(Json(JoinStudentResponse {
@@ -111,6 +113,8 @@ pub async fn join_student(
         session_id,
         position_id,
         position_type,
+        sector_id,
+        sector_name,
     }))
 }
 

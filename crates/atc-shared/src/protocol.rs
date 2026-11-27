@@ -56,6 +56,8 @@ pub struct JoinStudentResponse {
     pub session_id: SessionId,
     pub position_id: PositionId,
     pub position_type: StudentPositionType,
+    pub sector_id: SectorId,
+    pub sector_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
