@@ -1,15 +1,19 @@
 //! Local airport linework and static surface polygons from Aurora sector packages.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
+    fmt::Write,
     fs, io,
     path::{Component, Path, PathBuf},
 };
 
+use atc_shared::{ids::SectorId, sector::SectorIdentity};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[derive(Debug)]
 pub struct Sector {
+    pub identity: SectorIdentity,
     pub airports: Vec<Airport>,
 }
 
@@ -84,12 +88,17 @@ enum Geometry {
 }
 
 pub fn load(path: &Path) -> Result<Sector, AuroraError> {
-    let manifest = read(path)?;
+    let (manifest, manifest_bytes) = read_file(path)?;
     let package = canonicalize(
         path.parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new(".")),
     )?;
+    let mut files = PackageFiles {
+        package: package.clone(),
+        manifest: manifest_bytes,
+        entries: BTreeMap::new(),
+    };
     let include = package.join("Include");
     let mut roots = Vec::new();
     let mut references = Vec::new();
@@ -153,7 +162,7 @@ pub fn load(path: &Path) -> Result<Sector, AuroraError> {
         }
     }
     roots.push(include);
-    let colors = load_colors(&package, &roots, path, definitions)?;
+    let colors = load_colors(&mut files, &roots, path, definitions)?;
 
     let mut airports: Vec<Airport> = Vec::new();
     for (_, reference) in references
@@ -161,7 +170,7 @@ pub fn load(path: &Path) -> Result<Sector, AuroraError> {
         .filter(|(kind, _)| *kind == Geometry::Linework)
     {
         let source = resolve_include(&package, &roots, reference, false, path)?;
-        let lines = parse_lines(&source, &read(&source)?)?;
+        let lines = parse_lines(&source, &files.read(&source)?)?;
         if lines.is_empty() {
             continue;
         }
@@ -191,18 +200,26 @@ pub fn load(path: &Path) -> Result<Sector, AuroraError> {
             let source = resolve_include(&package, &roots, reference, true, path)?;
             airport
                 .fills
-                .extend(parse_fills(&source, &read(&source)?, &colors)?);
+                .extend(parse_fills(&source, &files.read(&source)?, &colors)?);
         }
     }
-    load_labels(&package, &roots, path, label_records, &mut airports)?;
+    load_labels(&mut files, &roots, path, label_records, &mut airports)?;
     for airport in &mut airports {
         project(airport);
     }
-    Ok(Sector { airports })
+    let name = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    Ok(Sector {
+        identity: files.identity(name),
+        airports,
+    })
 }
 
 fn load_labels(
-    package: &Path,
+    files: &mut PackageFiles,
     roots: &[PathBuf],
     manifest: &Path,
     declarations: Vec<(LabelKind, usize, &str)>,
@@ -215,8 +232,9 @@ fn load_labels(
             .filter(|(tag, value)| tag.trim().eq_ignore_ascii_case("F") && !value.contains(';'));
         if let Some((_, value)) = include {
             let reference = relative_path(value.trim(), manifest, line)?;
-            if let Some(source) = optional_label_file(package, roots, &reference, manifest)? {
-                if let Some(contents) = read_optional_label_file(&source) {
+            if let Some(source) = optional_label_file(&files.package, roots, &reference, manifest)?
+            {
+                if let Ok(contents) = files.read(&source) {
                     for (_, row) in records(&contents) {
                         attach_labels(airports, kind, row);
                     }
@@ -238,8 +256,10 @@ fn load_labels(
             format!("{lowercase}.GTS"),
         ];
         for name in names {
-            if let Some(source) = optional_label_file(package, roots, Path::new(&name), manifest)? {
-                if let Some(contents) = read_optional_label_file(&source) {
+            if let Some(source) =
+                optional_label_file(&files.package, roots, Path::new(&name), manifest)?
+            {
+                if let Ok(contents) = files.read(&source) {
                     for (_, row) in records(&contents) {
                         attach_labels(std::slice::from_mut(airport), LabelKind::Stand, row);
                     }
@@ -249,10 +269,6 @@ fn load_labels(
         }
     }
     Ok(())
-}
-
-fn read_optional_label_file(path: &Path) -> Option<String> {
-    read(path).ok()
 }
 
 fn optional_label_file(
@@ -329,7 +345,7 @@ fn airport_id(reference: &Path) -> String {
 }
 
 fn load_colors(
-    package: &Path,
+    files: &mut PackageFiles,
     roots: &[PathBuf],
     manifest: &Path,
     definitions: Vec<(usize, &str)>,
@@ -339,8 +355,8 @@ fn load_colors(
         let (label, value) = color_definition(manifest, line, record)?;
         if label.eq_ignore_ascii_case("F") {
             let reference = relative_path(value, manifest, line)?;
-            let source = resolve_include(package, roots, &reference, false, manifest)?;
-            for (line, record) in records(&read(&source)?) {
+            let source = resolve_include(&files.package, roots, &reference, false, manifest)?;
+            for (line, record) in records(&files.read(&source)?) {
                 let (label, value) = color_definition(&source, line, record)?;
                 let color = rgb(value).ok_or_else(|| malformed(&source, line, "DEFINE color"))?;
                 colors.insert(label.to_ascii_uppercase(), color);
@@ -365,11 +381,59 @@ fn color_definition<'a>(
         .ok_or_else(|| malformed(path, line, "DEFINE record"))
 }
 
-fn read(path: &Path) -> Result<String, AuroraError> {
-    fs::read_to_string(path).map_err(|source| AuroraError::Read {
+/// Raw bytes of every package file read during load, keyed by package-relative
+/// path so the identity depends on content alone, not location or load order.
+struct PackageFiles {
+    package: PathBuf,
+    manifest: Vec<u8>,
+    entries: BTreeMap<PathBuf, Vec<u8>>,
+}
+
+impl PackageFiles {
+    fn read(&mut self, path: &Path) -> Result<String, AuroraError> {
+        let (contents, bytes) = read_file(path)?;
+        if let Ok(relative) = path.strip_prefix(&self.package) {
+            self.entries.entry(relative.to_owned()).or_insert(bytes);
+        }
+        Ok(contents)
+    }
+
+    fn identity(&self, name: String) -> SectorIdentity {
+        let mut hasher = Sha256::new();
+        hasher.update(&self.manifest);
+        for (relative, bytes) in &self.entries {
+            hasher.update(relative.as_os_str().as_encoded_bytes());
+            hasher.update([0]);
+            hasher.update(bytes);
+            hasher.update([0]);
+        }
+        let digest = hasher.finalize();
+        let mut hex = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            let _ = write!(hex, "{byte:02x}");
+        }
+        SectorIdentity {
+            sector_id: SectorId::new(format!("aurora-{}", &hex[..16])),
+            name,
+        }
+    }
+}
+
+fn read_file(path: &Path) -> Result<(String, Vec<u8>), AuroraError> {
+    let bytes = fs::read(path).map_err(|source| AuroraError::Read {
         path: path.to_owned(),
         source,
-    })
+    })?;
+    let contents = std::str::from_utf8(&bytes)
+        .map_err(|_| AuroraError::Read {
+            path: path.to_owned(),
+            source: io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            ),
+        })?
+        .to_owned();
+    Ok((contents, bytes))
 }
 
 fn canonicalize(path: &Path) -> Result<PathBuf, AuroraError> {
@@ -792,5 +856,51 @@ mod tests {
             .labels
             .iter()
             .any(|label| label.kind == LabelKind::Stand && label.text == "100"));
+    }
+
+    #[test]
+    fn identity_is_preserved_when_package_moves_directories() {
+        let (_first, first_manifest) = fixture();
+        let (_second, second_manifest) = fixture();
+        let first = load(&first_manifest).unwrap();
+        let second = load(&second_manifest).unwrap();
+        assert_eq!(first.identity, second.identity);
+        assert_eq!(first.identity.name, "coast");
+        assert!(first.identity.sector_id.as_str().starts_with("aurora-"));
+    }
+
+    #[test]
+    fn editing_a_coordinate_changes_the_identity() {
+        let (directory, manifest) = fixture();
+        let before = load(&manifest).unwrap().identity;
+        let geo = directory.path().join("Include/Fixture/Airports/zzxy.geo");
+        let data = fs::read_to_string(&geo).unwrap();
+        fs::write(&geo, data.replacen("-32.999", "-32.998", 1)).unwrap();
+
+        let after = load(&manifest).unwrap().identity;
+        assert_ne!(before.sector_id, after.sector_id);
+        assert_eq!(before.name, after.name);
+    }
+
+    #[test]
+    fn different_packages_have_different_identities() {
+        let (_first, first_manifest) = fixture();
+        let (second, second_manifest) = fixture();
+        let airports = second.path().join("Include/Fixture/Airports");
+        for extension in ["geo", "tfl"] {
+            fs::rename(
+                airports.join(format!("zzxy.{extension}")),
+                airports.join(format!("zzyy.{extension}")),
+            )
+            .unwrap();
+        }
+        let data = fs::read_to_string(&second_manifest)
+            .unwrap()
+            .replace("zzxy", "zzyy");
+        fs::write(&second_manifest, data).unwrap();
+
+        let first = load(&first_manifest).unwrap();
+        let other = load(&second_manifest).unwrap();
+        assert_ne!(first.identity.sector_id, other.identity.sector_id);
     }
 }

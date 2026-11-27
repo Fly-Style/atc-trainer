@@ -9,6 +9,7 @@ use gpui::{
 
 use crate::{
     aurora::{self, Airport, LabelKind, Sector},
+    host::{self, HostInfo},
     sector_camera::{MapBounds, SectorCamera},
 };
 
@@ -72,6 +73,8 @@ pub fn run(path: Option<PathBuf>) {
                         drag_from: None,
                         busy: false,
                         error: None,
+                        hosting: false,
+                        host: None,
                     };
                     if let Some(path) = path {
                         viewer.load(path, cx);
@@ -96,6 +99,8 @@ struct SectorViewer {
     drag_from: Option<Point<Pixels>>,
     busy: bool,
     error: Option<String>,
+    hosting: bool,
+    host: Option<HostInfo>,
 }
 
 impl SectorViewer {
@@ -159,8 +164,53 @@ impl SectorViewer {
                     Ok(sector) => {
                         viewer.sector = Some((file_name, Arc::new(sector)));
                         viewer.select(0, cx);
+                        // Evidence hook: host immediately after load for screenshots.
+                        if std::env::var_os("ATC_AUTO_HOST").is_some_and(|value| value == "1") {
+                            viewer.host_session(cx);
+                        }
                     }
                     Err(error) => viewer.error = Some(format!("Could not open sector. {error:#}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn host_session(&mut self, cx: &mut Context<Self>) {
+        if self.busy || self.hosting || self.host.is_some() {
+            return;
+        }
+        let Some((_, sector)) = self.sector.as_ref() else {
+            return;
+        };
+        let identity = sector.identity.clone();
+        self.hosting = true;
+        self.error = None;
+        cx.notify();
+
+        let ready = match host::spawn(identity) {
+            Ok(ready) => ready,
+            Err(error) => {
+                self.hosting = false;
+                self.error = Some(format!("Could not start the session server. {error}"));
+                cx.notify();
+                return;
+            }
+        };
+        cx.spawn(async move |this, cx| {
+            let result = ready.await;
+            let _ = this.update(cx, |viewer, cx| {
+                viewer.hosting = false;
+                match result {
+                    Ok(Ok(info)) => viewer.host = Some(info),
+                    Ok(Err(error)) => {
+                        viewer.error = Some(format!("Could not start the session server. {error}"));
+                    }
+                    Err(_) => {
+                        viewer.error =
+                            Some("The session server stopped before reporting its address.".into());
+                    }
                 }
                 cx.notify();
             });
@@ -331,6 +381,7 @@ impl Render for SectorViewer {
                 )
         });
 
+        let can_host = self.sector.is_some() && !self.busy && !self.hosting && self.host.is_none();
         let toolbar = div()
             .flex()
             .items_center()
@@ -368,6 +419,22 @@ impl Render for SectorViewer {
                         toolbar_button("fit", "Fit Airport")
                             .on_click(cx.listener(|viewer, _, _, cx| viewer.fit(cx))),
                     )
+                    .child(
+                        toolbar_button(
+                            "host-session",
+                            if self.hosting {
+                                "Starting…"
+                            } else if self.host.is_some() {
+                                "Hosting"
+                            } else {
+                                "Host Session"
+                            },
+                        )
+                        .when(!can_host, |button| button.text_color(rgb(MUTED)))
+                        .when(can_host, |button| {
+                            button.on_click(cx.listener(|viewer, _, _, cx| viewer.host_session(cx)))
+                        }),
+                    )
             });
 
         div()
@@ -391,6 +458,45 @@ impl Render for SectorViewer {
             .text_sm()
             .text_color(rgb(TEXT))
             .child(toolbar)
+            .when_some(self.host.as_ref(), |root, info| {
+                let address = info.address.clone();
+                let join_string = info.join_string.clone();
+                root.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_3()
+                        .px_3()
+                        .py_2()
+                        .flex_shrink_0()
+                        .bg(rgb(PANEL))
+                        .border_b_1()
+                        .border_color(rgb(BORDER))
+                        .child(div().text_color(rgb(MUTED)).child("HOSTING"))
+                        .child(div().child(info.address.clone()))
+                        .child(
+                            toolbar_button("copy-address", "Copy Address").on_click(cx.listener(
+                                move |_, _, _, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        address.clone(),
+                                    ));
+                                },
+                            )),
+                        )
+                        .child(div().text_color(rgb(MUTED)).child("Student join:"))
+                        .child(div().child(info.join_string.clone()))
+                        .child(
+                            toolbar_button("copy-join", "Copy Join String").on_click(cx.listener(
+                                move |_, _, _, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        join_string.clone(),
+                                    ));
+                                },
+                            )),
+                        ),
+                )
+            })
             .when_some(self.error.as_ref(), |root, error| {
                 root.child(
                     div()

@@ -509,7 +509,7 @@ mod tests {
         AircraftCategory, AircraftOrigin, AircraftStatus, ControlledByPosition, FlightRuleType,
         MovementMode, SquawkMode,
     };
-    use atc_shared::ids::{PositionId, SessionHash, SessionId, TrainerId};
+    use atc_shared::ids::{PositionId, SectorId, SessionHash, SessionId, TrainerId};
     use atc_shared::role::StudentPositionType;
     use atc_shared::session::{ConnectionState, SessionStatus, StudentPosition, TrainerInfo};
     use std::sync::Arc;
@@ -530,6 +530,8 @@ mod tests {
             session_hash: SessionHash::new("join-T"),
             name: "test".into(),
             status: SessionStatus::Running,
+            sector_id: SectorId::new("airport_v1"),
+            sector_name: "Training Airport".into(),
             student_position: Some(StudentPosition {
                 position_id: PositionId::new("pos_t"),
                 position_type,

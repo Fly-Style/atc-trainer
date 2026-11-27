@@ -18,6 +18,7 @@ fn empty_snapshot() -> SessionState {
         session_hash: SessionHash::new("join-X"),
         status: SessionStatus::Draft,
         sector_id: SectorId::new("airport_01"),
+        sector_name: "Training Airport".into(),
         student_position: None,
         trainers: vec![],
         aircraft: vec![],

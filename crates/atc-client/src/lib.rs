@@ -2,6 +2,7 @@
 
 pub mod aurora;
 pub mod core;
+pub mod host;
 mod sector_camera;
 pub mod sector_viewer;
 #[cfg(feature = "legacy-iced")]

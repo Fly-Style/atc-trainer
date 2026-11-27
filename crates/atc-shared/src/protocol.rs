@@ -22,6 +22,10 @@ pub struct TrainerLoginResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateSessionRequest {
     pub name: String,
+    #[serde(default)]
+    pub sector_id: Option<SectorId>,
+    #[serde(default)]
+    pub sector_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
