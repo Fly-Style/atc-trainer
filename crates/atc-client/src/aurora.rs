@@ -818,28 +818,106 @@ mod tests {
         assert!(!sector.airports[0].lines.is_empty());
     }
 
+    fn multi_airport_fixture() -> (TempDir, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let include = directory.path().join("Include/Artificial");
+        let airports = include.join("Airports");
+        fs::create_dir_all(&airports).unwrap();
+        let manifest = directory.path().join("artificial.isc");
+        fs::write(
+            &manifest,
+            concat!(
+                "[INFO]\r\n",
+                "N050.00.00.000\r\n",
+                "E010.00.00.000\r\n",
+                "60\r\n",
+                "40\r\n",
+                "0.0\r\n",
+                "Artificial\r\n",
+                "7.0\r\n",
+                "\r\n",
+                "[DEFINE]\r\n",
+                "F;colors.def;\r\n",
+                "[GEO]\r\n",
+                "F;\\Airspace\\fir.geo\r\n",
+                "F;\\Airports\\zzaa.geo\r\n",
+                "F;\\Airports\\zzbb.geo\r\n",
+                "[FILLCOLOR]\r\n",
+                "F;/Airports/dynamic.fcl\r\n",
+                "F;/Airports/zzbb.tfl\r\n",
+                "[RUNWAY]\r\n",
+                "F;/thresholds.rwy\r\n",
+            ),
+        )
+        .unwrap();
+        fs::write(include.join("colors.def"), "GRASS;%39:61:48;\r\n").unwrap();
+        fs::write(
+            airports.join("zzaa.geo"),
+            "N051.00.00.000;E011.00.00.000;N051.01.00.000;E011.00.00.000;RUNWAY;\r\n",
+        )
+        .unwrap();
+        // Eastern runway (36R/18L) at E010°00'00", western runway (36L/18R) ~1.4 km west at E009°58'48".
+        fs::write(
+            airports.join("zzbb.geo"),
+            concat!(
+                "N050.00.00.000;E010.00.00.000;N050.01.12.000;E010.00.00.000;RUNWAY;\r\n",
+                "N050.00.00.000;E010.00.02.000;N050.01.12.000;E010.00.02.000;RUNWAY;\r\n",
+                "N0500000000;E0095848000;N0500112000;E0095848000;RUNWAY;\r\n",
+                "N0500000000;E0095850000;N0500112000;E0095850000;RUNWAY;\r\n",
+                "N050.00.36.000;E009.58.48.000;N050.00.36.000;E010.00.00.000;TAXIWAY;\r\n",
+            ),
+        )
+        .unwrap();
+        // Placed directly under the include root to cover root-level TFL fallback resolution.
+        fs::write(
+            include.join("zzbb.tfl"),
+            concat!(
+                "STATIC;GRASS;1;#00273d30;\r\n",
+                "N050.00.00.000;E009.58.48.000;\r\n",
+                "N050.01.12.000;E009.58.48.000;\r\n",
+                "N050.01.12.000;E010.00.00.000;\r\n",
+                "N050.00.00.000;E010.00.00.000;\r\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            include.join("thresholds.rwy"),
+            concat!(
+                "ZZBB;36R;18L;0;0;360;180;N050.00.00.000;E010.00.00.000;N050.01.12.000;E010.00.00.000;\r\n",
+                "ZZBB;36L;18R;0;0;360;180;N050.00.00.000;E009.58.48.000;N050.01.12.000;E009.58.48.000;\r\n",
+            ),
+        )
+        .unwrap();
+        // Auto-discovered without a [GATES] section in the manifest.
+        fs::write(
+            include.join("zzbb.gts"),
+            "100;ZZBB;N050.00.36.000;E009.59.24.000;\r\n",
+        )
+        .unwrap();
+        (directory, manifest)
+    }
+
     #[test]
-    fn loads_reference_airport_when_package_is_available() {
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ukbu-aurora/UKBU.isc");
-        if !manifest.is_file() {
-            return;
-        }
+    fn loads_parallel_runways_with_northern_eastern_projection() {
+        let (_directory, manifest) = multi_airport_fixture();
         let sector = load(&manifest).unwrap();
+        assert_eq!(sector.airports.len(), 2);
         let airport = sector
             .airports
             .iter()
-            .find(|airport| airport.id == "UKBB")
+            .find(|airport| airport.id == "ZZBB")
             .unwrap();
-        let runway = |x: std::ops::Range<f64>| {
+        let runway_count = |x: std::ops::Range<f64>| {
             airport
                 .lines
                 .iter()
-                .filter(move |line| line.runway && x.contains(&line.start[0]))
+                .filter(|line| line.runway && x.contains(&line.start[0]))
+                .count()
         };
         // The western runway is more than a kilometre west of the eastern one.
-        assert!(runway(-2_000.0..-1_000.0).count() >= 20);
-        assert!(runway(-30.0..300.0).count() >= 20);
-        assert!(airport.fills.iter().any(|fill| fill.color == 0x273d30));
+        assert_eq!(runway_count(-2_000.0..-1_000.0), 2);
+        assert_eq!(runway_count(-30.0..300.0), 2);
+
         let threshold = |number: &str| {
             airport
                 .labels
@@ -852,10 +930,29 @@ mod tests {
         assert!(threshold("18R")[0] < threshold("18L")[0]);
         assert!(threshold("18L")[1] > threshold("36R")[1]);
         assert!(threshold("18R")[1] > threshold("36L")[1]);
-        assert!(airport
+    }
+
+    #[test]
+    fn discovers_root_fills_and_stand_files_without_gates_section() {
+        let (_directory, manifest) = multi_airport_fixture();
+        let sector = load(&manifest).unwrap();
+        let zzbb = sector
+            .airports
+            .iter()
+            .find(|airport| airport.id == "ZZBB")
+            .unwrap();
+        let zzaa = sector
+            .airports
+            .iter()
+            .find(|airport| airport.id == "ZZAA")
+            .unwrap();
+
+        assert!(zzbb.fills.iter().any(|fill| fill.color == 0x273d30));
+        assert!(zzbb
             .labels
             .iter()
             .any(|label| label.kind == LabelKind::Stand && label.text == "100"));
+        assert!(zzaa.labels.is_empty());
     }
 
     #[test]
