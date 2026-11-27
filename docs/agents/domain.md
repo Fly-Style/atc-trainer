@@ -6,7 +6,7 @@ This repo **does not use the ADR pattern** (`docs/adr/`) and **does not use sepa
 
 ## Before exploring, read these
 
-- **`docs/superpowers/specs/`**: read the top-level design specification (`docs/superpowers/specs/2026-11-26-atc-trainer-design.md`) and any phase or feature sub-specs relevant to the area you are working on.
+- **`docs/superpowers/specs/`**: read the top-level design specification (`docs/superpowers/specs/design-doc.md`) and any phase or feature sub-specs relevant to the area you are working on.
 
 Do not create `CONTEXT.md`, `CONTEXT-MAP.md`, or `docs/adr/` — even if a skill (such as `/domain-modeling`, `/grill-with-docs`, or `/improve-codebase-architecture`) normally offers to create them.
 
@@ -26,4 +26,4 @@ If a concept you need isn't defined in the relevant spec yet, flag the gap and c
 
 If your output (a ticket, refactor proposal, or implementation plan) contradicts a recorded decision in `docs/superpowers/specs/`, surface it explicitly rather than silently overriding:
 
-> _Contradicts `docs/superpowers/specs/2026-11-26-atc-trainer-design.md` (Section X), but worth reopening because…_
+> _Contradicts `docs/superpowers/specs/design-doc.md` (Section X), but worth reopening because…_

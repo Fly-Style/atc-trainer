@@ -84,7 +84,7 @@ Clients identify and open the required sector locally. Unavailable or incompatib
 
 ### Scenario files
 
-Scenarios describe initial setup only. They must define:
+Scenarios describe initial setup only. Each per-exercise scenario file references a specific FIR sector file and stays separate from per-airport extended sector data (such as ground anchors). Scenarios must define:
 
 - Aircraft and their initial locations.
 - Their flight plans.
@@ -190,6 +190,24 @@ These are capability stages, not implementation tasks or commitments to unapprov
 | 5 | Weather influence | Weather modeling (wind, QNH/atmosphere, visibility/METAR effects) layered onto the completed controller-training stages |
 
 The initial airborne procedure capability must support flying SIDs and STARs from IVAO-based sector files. The precise allocation between tower and approach delivery, and the procedure semantics supported at each milestone, need stage-level specifications; SID/STAR support must not be silently deferred to a distant optional integration.
+
+### Implementation phases
+
+Each high-level implementation phase maps to a GitHub Epic and builds incrementally across the delivery stages above:
+
+| Phase | Name | Scope |
+| --- | --- | --- |
+| 1 | Core app & session bootstrap | GPUI app renders local IVAO Aurora airports, hosts an in-app HTTP server, verifies local sector identity, and admits a student |
+| 2 | Scenarios & traffic rendering | Per-exercise scenario format (referencing a specific FIR sector file; initial aircraft with ICAO type/wake metadata, flight plans, and separate initial physical vs. student states), host-to-client state sync, and aircraft/label rendering in the required airport |
+| 3 | Ground anchors & instructor ground movement | Per-airport extended sector format for ground anchors (`TAXI`, `PUSHBACK_FACING_XXX`, `15 kt` / `30 kt` taxi-speed classes), visible instructor route selection by clicking anchors, `move`/`stop` ground commands, finite accel/decel physics, and occupied-anchor auto-stop |
+| 4 | Student ground workflow & transfers | Decoupled student informational marks, right-click label control (`free`/`assumed`/`transferred`), Aurora-style departure/arrival lists, read-only instructor visibility of student marks, and inbound/outbound artificial-neighbor transfers |
+| 5 | Multi-instructor & direct-IP session hardening | Co-instructor join string and role permissions, server last-write-wins conflict handling, disconnect and slot takeover (replacing permanent `occupied = true`), and direct-IP remote hosting readiness |
+| 6 | Tower operations & core airborne simulation (Stage 2) | `.lnmperf` performance engine (embedded **A320, B737, C172** + local import + wake-turbulence fallback; no-weather `GS = TAS`), runway operations (takeoff, landing, go-around, ground-to-runway transition), airborne commands (heading, altitude, speed), and VFR traffic patterns |
+| 7 | Approach & procedure flying (Stage 3) | Parsing and flying IVAO sector SIDs and STARs, approach procedures, terminal radar layers (fixes/waypoints/TMA), and approach workflows |
+| 8 | Area control (Stage 4) | En-route FIR/airway rendering, high-altitude cruise and flight levels, sector handoffs, and larger-traffic ergonomics |
+| 9 | Persistence, recovery & movement replay | Low-priority durable movement history and session persistence, host crash recovery, explicit session end preserving recordings, and movement replay playback |
+| 10 (Interlude) | Dedicated self-hostable server & observers | Standalone self-hostable server binary (joining without exposing instructor IP) and Observer role (up to four read-only participants); **may be executed in parallel with other phases** once live sessions are established |
+| 11 | Weather influence (Stage 5) | Wind (`GS ≠ TAS`, drift, headwind/crosswind), QNH/atmosphere, and visibility/METAR effects layered onto all completed controller stages |
 
 Ground operational requirements beyond the agreed baseline, and detailed tower/approach/area workflows, are deferred rather than assumed complete. Later work must define concrete exercises and acceptance cases for each position, including the interaction between ground, runway and airborne movement.
 

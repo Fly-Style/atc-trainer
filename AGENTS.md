@@ -5,7 +5,7 @@
 - `crates/atc-client/` contains the GPUI desktop app. The sector viewer is in `src/sector_viewer.rs`, the Aurora parser is in `src/aurora.rs`, and the client state and network adapters are in `src/core/`.
 - `crates/atc-server/` owns the Axum HTTP and WebSocket endpoints, authentication, and session state. Put protocol types shared by the client and server in `crates/atc-shared/`.
 - `crates/atc-test-support/` provides reusable server, client, and fixture helpers. Integration tests live in `crates/atc-server/tests/` and `crates/atc-client/tests/`.
-- `docs/` contains the [design specification](docs/superpowers/specs/2026-11-26-atc-trainer-design.md), screenshots, and `scenario-gnd-36-medium.toml`. The local `ukbu-aurora/` checkout contains sector data when available.
+- `docs/` contains the [design specification](docs/superpowers/specs/design-doc.md), screenshots, and `scenario-gnd-36-medium.toml`. The local `ukbu-aurora/` checkout contains sector data when available.
 
 ## Development Workflow
 
@@ -35,6 +35,15 @@ Use Rust's `#[test]` for synchronous cases and `#[tokio::test]` for async integr
 Use short, action-led subjects such as “Add GPUI Aurora sector viewer.” Recent squash commits include the PR number. Explain the behavior change, link the related issue, and list the checks you ran. Show UI changes with screenshots or a short demo video. Keep demo media on a separate branch and link it from the PR.
 
 ## Agent skills
+
+### Workflow skills
+
+This repository uses **Matt Pocock skills** (`mattpocock/skills`) and **Superpowers skills** (`obra/superpowers`) extensively across design, planning, domain modeling, ticket slicing, debugging, TDD, and code review. Install them in your agent environment if they are not already available globally; only the core coding/behavior skills (`karpathy-guidelines`, `rust-best-practices`, and `rust-async-patterns`) are vendored directly in `.agents/skills/`.
+
+### Session start
+
+- **`karpathy-guidelines`** (`.agents/skills/karpathy-guidelines/SKILL.md`) is the **only** skill that MUST be loaded automatically on session start.
+- Do **not** auto-load any other skill (including `using-superpowers`) on session start; load other skills only on demand when explicitly requested or clearly applicable to the active task.
 
 ### Issue tracker
 
