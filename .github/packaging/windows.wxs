@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="ATC Trainer" Language="1033" Version="$(var.Version)" Manufacturer="ATC Trainer" UpgradeCode="{AD0FCF1F-B548-4059-A236-E68FEBA1FAFD}">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" Platform="x64" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of ATC Trainer is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="INSTALLFOLDER" Name="ATC Trainer">
+          <Directory Id="ScenarioFolder" Name="docs" />
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="ATC Trainer" />
+      </Directory>
+    </Directory>
+
+    <ComponentGroup Id="ProductComponents">
+      <Component Id="ApplicationFiles" Directory="INSTALLFOLDER" Guid="*" Win64="yes">
+        <File Id="ClientExe" Source="$(var.ProjectDir)\target\release\atc-client.exe" />
+        <File Id="ServerExe" Source="$(var.ProjectDir)\target\release\atc-server.exe" />
+        <File Id="ServerConfig" Source="$(var.ProjectDir)\server.toml" />
+        <RegistryValue Root="HKCU" Key="Software\ATCTrainer" Name="InstallFolder" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+      </Component>
+      <Component Id="DefaultScenario" Directory="ScenarioFolder" Guid="*" Win64="yes">
+        <File Id="DefaultScenarioFile" Source="$(var.ProjectDir)\docs\scenario-gnd-36-medium.toml" />
+        <RegistryValue Root="HKCU" Key="Software\ATCTrainer" Name="Scenario" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveScenarioFolder" Directory="ScenarioFolder" On="uninstall" />
+      </Component>
+      <Component Id="ApplicationShortcuts" Directory="ApplicationProgramsFolder" Guid="*" Win64="yes">
+        <Shortcut Id="ClientShortcut" Directory="ApplicationProgramsFolder" Name="ATC Trainer" Target="[INSTALLFOLDER]atc-client.exe" WorkingDirectory="INSTALLFOLDER" />
+        <Shortcut Id="ServerShortcut" Directory="ApplicationProgramsFolder" Name="ATC Trainer Server" Target="[INSTALLFOLDER]atc-server.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveApplicationProgramsFolderOnUninstall" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\ATCTrainer" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="ProductFeature" Title="ATC Trainer" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+  </Product>
+</Wix>

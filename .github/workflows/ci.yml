@@ -7,17 +7,37 @@ on:
 permissions:
   contents: read
 
-env:
-  # AWS-LC can use bundled assembly objects on Windows runners without NASM.
-  AWS_LC_SYS_PREBUILT_NASM: '1'
-
 jobs:
   test:
-    name: Test (${{ matrix.platform }})
+    name: Test (Linux)
+    runs-on: ubuntu-slim
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install GPUI system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libfontconfig1-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev pkg-config
+      - name: Install Rust
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.100.0
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Run all workspace tests
+        run: cargo test --workspace --all-features --locked --no-fail-fast
+
+  assemble:
+    name: Assemble (${{ matrix.platform }})
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix: &platforms
+      matrix:
         include:
           - platform: windows-x64
             runner: windows-2025
@@ -29,33 +49,73 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: cargo test --workspace --all-features --locked
-
-  assemble:
-    name: Assemble (${{ matrix.platform }})
-    if: github.event_name == 'workflow_dispatch'
-    needs: test
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix: *platforms
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - run: cargo build --release --locked --workspace --bins
-      - name: Package executables
+      - name: Build Windows binaries
+        if: runner.os == 'Windows'
+        env:
+          AWS_LC_SYS_PREBUILT_NASM: '1'
+        run: cargo build --release --locked --workspace --bins
+      - name: Set Windows installer version
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $client = (cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json).packages | Where-Object { $_.name -eq 'atc-client' }
+          $parts = $client.version.Split('.')
+          if ($parts.Count -ne 3) { throw "Expected a three-part Cargo version, got $($client.version)" }
+          "MSI_VERSION=$($parts[0]).$($parts[1]).$env:GITHUB_RUN_NUMBER" >> $env:GITHUB_ENV
+      - name: Build Windows MSI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          candle.exe -nologo "-dVersion=$env:MSI_VERSION" "-dProjectDir=$env:GITHUB_WORKSPACE" -out "$env:RUNNER_TEMP\atc-trainer.wixobj" ".github\packaging\windows.wxs"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          light.exe -nologo -out "atc-trainer-windows-x64.msi" "$env:RUNNER_TEMP\atc-trainer.wixobj"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build macOS binaries
+        if: runner.os == 'macOS'
+        run: cargo build --release --locked --workspace --bins
+      - name: Package macOS installer and executable bundle
+        if: runner.os == 'macOS'
         shell: bash
         env:
-          PACKAGE: atc-trainer-${{ matrix.platform }}
-          EXE: ${{ runner.os == 'Windows' && '.exe' || '' }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
-          mkdir -p "$PACKAGE/docs"
-          cp "target/release/atc-client$EXE" "target/release/atc-server$EXE" server.toml "$PACKAGE/"
-          cp docs/scenario-gnd-36-medium.toml "$PACKAGE/docs/"
-          # A tar archive preserves the macOS executable bits on download.
-          tar -czf "$PACKAGE.tar.gz" "$PACKAGE"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "atc-client") | .version')"
+          app="$RUNNER_TEMP/ATC Trainer.app"
+          mkdir -p "$app/Contents/MacOS"
+          install -m 755 target/release/atc-client "$app/Contents/MacOS/atc-client"
+          plutil -create xml1 "$app/Contents/Info.plist"
+          plutil -insert CFBundleIdentifier -string io.github.fly-style.atc-trainer "$app/Contents/Info.plist"
+          plutil -insert CFBundleName -string "ATC Trainer" "$app/Contents/Info.plist"
+          plutil -insert CFBundleExecutable -string atc-client "$app/Contents/Info.plist"
+          plutil -insert CFBundlePackageType -string APPL "$app/Contents/Info.plist"
+          plutil -insert CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"
+          plutil -insert CFBundleVersion -string "$version" "$app/Contents/Info.plist"
+          plutil -insert NSHighResolutionCapable -bool true "$app/Contents/Info.plist"
+          pkgbuild --component "$app" --install-location /Applications --identifier io.github.fly-style.atc-trainer --version "$version" "atc-trainer-$PLATFORM.pkg"
+          package="atc-trainer-$PLATFORM"
+          mkdir -p "$package/docs"
+          install -m 755 target/release/atc-client target/release/atc-server "$package/"
+          cp server.toml "$package/"
+          cp docs/scenario-gnd-36-medium.toml "$package/docs/"
+          tar -czf "$package.tar.gz" "$package"
+      - name: Upload Windows MSI
+        if: matrix.platform == 'windows-x64'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: atc-trainer-windows-x64.msi
+          archive: false
+          if-no-files-found: error
+      - name: Upload macOS installer
+        if: startsWith(matrix.platform, 'macos-')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: atc-trainer-${{ matrix.platform }}.pkg
+          archive: false
+          if-no-files-found: error
+      - name: Upload macOS executable bundle
+        if: startsWith(matrix.platform, 'macos-')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: atc-trainer-${{ matrix.platform }}.tar.gz
           archive: false
