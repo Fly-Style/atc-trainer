@@ -33,3 +33,17 @@ Use Rust's `#[test]` for synchronous cases and `#[tokio::test]` for async integr
 ## Commits and Pull Requests
 
 Use short, action-led subjects such as “Add GPUI Aurora sector viewer.” Recent squash commits include the PR number. Explain the behavior change, link the related issue, and list the checks you ran. Show UI changes with screenshots or a short demo video. Keep demo media on a separate branch and link it from the PR.
+
+## Agent skills
+
+### Issue tracker
+
+Actionable work items are tracked in GitHub Issues (`Fly-Style/atc-trainer`) via the `gh` CLI using an **Epic → Story → Task** hierarchy; design specifications live in `docs/superpowers/specs/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Uses `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `bug` (no `wontfix` label). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+All domain context, terminology, and architectural decisions live in `docs/superpowers/specs/` (no `CONTEXT.md` and no ADR pattern / `docs/adr/`). See `docs/agents/domain.md`.

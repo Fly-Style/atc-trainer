@@ -10,31 +10,33 @@ Build an instructor-led ATC trainer for both learning controller operations and 
 
 The student experience should resemble IVAO Aurora in appearance, information presentation and controller workflows. Usability improvements are allowed. The instructor has a separate traffic-management interface suited to operating simulated aircraft.
 
-This document supersedes conflicting product requirements in the [historical software design](../../atc-training-software-design.md). That document's frozen v1 scope and the earlier technical/protocol designs do not constrain this product. This document does not claim the new requirements are implemented.
+This document supersedes conflicting product requirements from the earlier historical v1 software and protocol designs (previously archived in git history). Those frozen v1 scopes and earlier technical/protocol designs do not constrain this product. This document does not claim the new requirements are implemented.
 
 ## 2. Product boundaries
 
 - Native Rust desktop application using [GPUI](https://gpui.rs/).
 - Native builds for Windows, macOS and Linux. All initial controller displays are 2D.
-- The main instructor hosts the server through the application. The co-instructor and student connect remotely over the Internet.
+- Hosting modes for remote sessions:
+  1. **Direct instructor-hosted session via IP (primary / initial mode)**: the main instructor hosts the server through the desktop application and the co-instructor and student connect directly to the host's IP/address (over LAN, VPN/mesh, or port-forwarded/public IP).
+  2. **Separate self-hostable server binary (planned for a later revision)**: allows participants to join a hosted server without exposing an instructor's personal IP address or traversing consumer NAT.
 - One student per session initially. Up to four observers are part of the intended product; observer permissions and delivery timing are deferred.
 - Aircraft count is variable, without a fixed product cap. This does not assert unlimited hardware capacity.
-- No connections to third-party services, live ATC networks or external flight simulators.
-- No built-in voice or Discord/TeamSpeak integration. Participants arrange simulated radio communication separately using those applications.
-- No weather simulation initially. Scenario-defined weather was considered and deferred.
-- Delivery proceeds through ground, tower, approach and area control, in that order.
+- No connections to third-party services, live ATC networks or external flight simulators. (The optional separate server binary is a first-party, self-hostable component of this product, not a third-party service.)
+- No built-in voice or Discord/TeamSpeak integration. Participants — including main and co-instructors coordinating aircraft control — arrange simulated radio and coordination voice communication separately using those applications.
+- No weather simulation until the latest stage of development; delivering practical controller training without weather takes priority over delaying training for weather modeling.
+- Delivery proceeds through ground, tower, approach, area control, and finally weather influence, in that order.
 
 GPUI documents Windows, macOS and Linux support, including Wayland and X11 on Linux. It is still pre-1.0 and may introduce breaking changes. These are documented framework capabilities, not proof that this application's builds work on all platforms. See the [official GPUI README](https://github.com/zed-industries/zed/tree/main/crates/gpui).
 
 ## 3. Session architecture and responsibilities
 
-The main instructor's application hosts the authoritative session server and simulation. Connected applications send permitted actions and render synchronized aircraft state. They do not independently determine canonical aircraft movement.
+The authoritative session server and simulation initially run inside the main instructor's desktop application (direct IP hosting), with a separate self-hostable server binary planned for a later revision to avoid exposing instructor IPs. Connected applications send permitted actions and render synchronized aircraft state. They do not independently determine canonical aircraft movement.
 
 ```mermaid
 flowchart LR
-    Main[Main instructor UI] <-->|Controls and state| Host[Instructor-hosted session server and simulation]
+    Main[Main instructor UI] <-->|Controls and state| Host["Authoritative session server and simulation (in-app host; separate server binary planned)"]
     Co[Co-instructor UI] <-->|Controls and state| Host
-    Student[Student UI] <-->|Informational marks and state| Host
+    Student[Student UI] <-->|Informational marks, label control and state| Host
     Host --> Recording[(Local movement history and recovery data)]
     Recording --> Replay[Movement replay]
 ```
@@ -57,16 +59,16 @@ Existing Rust client-core, server and shared-protocol code are the starting poin
 
 | Role | Responsibility and authority |
 | --- | --- |
-| Main instructor | Hosts the server, generates invitations, operates aircraft and manages hosting and explicit session end |
-| Co-instructor | Has the same operational aircraft and exercise controls as the main instructor; does not own hosting or explicit session end |
-| Student | Occupies one controller position and maintains informational aircraft marks; cannot drive aircraft movement |
+| Main instructor | Owns session lifecycle (in-app hosting or server session creation, invitations, explicit session end) and has full operational aircraft and transfer controls |
+| Co-instructor | Has the same operational aircraft, exercise, and neighbor-transfer controls as the main instructor; does not own hosting or explicit session end |
+| Student | Occupies one controller position, maintains informational aircraft marks, and manages aircraft label control (`free`, `assumed`, `transferred`); cannot drive aircraft movement |
 | Observer | Up to four are intended; visibility, permissions and admission details remain deferred |
 
 The main instructor generates separate join strings for the student and co-instructor. A join string grants its intended role; a joining client must not elevate its permissions by selecting a different role. User accounts are not required for these invitation-based roles.
 
 Retain the simplicity of the existing generated-string approach, while extending it to co-instructor admission. Do not freeze the current `join-XXXXXX` syntax or assume the existing configured trainer credential satisfies the new hosting flow.
 
-The code currently treats a join string as an access credential, with a separately entered server address. A generated string does not by itself make the host reachable over the Internet. The new connection experience remains an engineering requirement to resolve below.
+The code currently treats a join string as an access credential, with a separately entered server address. Initially, direct in-app hosting connects via the instructor's IP/address; the planned separate self-hostable server binary will later allow joining without sharing an instructor's personal IP. Transport security (encryption in transit), invitation lifecycle/revocation, and reconnection tokens belong in the session-and-networking specification.
 
 ## 4. Local data and scenario setup
 
@@ -86,12 +88,13 @@ Scenarios describe initial setup only. They must define:
 
 - Aircraft and their initial locations.
 - Their flight plans.
-- Their initial operational states, for example empty/no clearance, clearance received, pushback cleared, startup cleared, taxi-out/in cleared or takeoff cleared.
-- The initial physical state needed to place and simulate each aircraft consistently.
+- Separate initial state fields for the two roles so independence is preserved at load time:
+  - **Initial physical/simulator state** needed to place and simulate each aircraft consistently.
+  - **Initial student informational state and label control state** (for example empty/no clearance, clearance received, pushback cleared, startup cleared, taxi-out/in cleared or takeoff cleared; and initial label control `free`, `assumed`, or `transferred`).
 
 These state examples are not a complete enumeration, mandatory sequence or complete ground-training task list. Exact flight-plan fields and initial-state serialization remain to be specified.
 
-Scenario files do not script movement, future traffic appearances or timed exercise events. Instructors direct all aircraft movement during the exercise.
+Scenario files are loaded on the host/server and the resulting session and aircraft state is sent from the server to all connected clients; guest clients do not need local scenario files. Scenario files do not script movement, future traffic appearances or timed exercise events. Instructors direct all aircraft movement during the exercise.
 
 ### Aircraft performance files
 
@@ -99,7 +102,7 @@ Support local import of Little Navmap `.lnmperf` aircraft performance profiles. 
 
 The documented XML profiles supply phase speeds and climb/descent rates, along with flight-planning data. Speeds are TAS in knots; vertical speeds are feet per minute. They do not supply acceleration, braking, turn dynamics, taxi speed or pushback dynamics. Importing them therefore does not by itself satisfy the realistic-motion requirement. See the [format documentation](https://www.littlenavmap.org/manuals/littlenavmap/release/latest/en/FILES.html#aircraft-performance-file-format) and [published schema](https://www.littlenavmap.org/schema/lnmperf.xsd).
 
-Source/profile mapping, supported file versions, legacy INI compatibility and missing motion parameters require a later data-and-simulation design. No fallback performance constants have been agreed beyond the taxi-speed defaults below.
+By default, the application must embed built-in performance profiles for **A320, B737, and C172** (high priority in the corresponding implementation phase). If another aircraft's specific `.lnmperf` profile is missing, the simulator falls back to an available profile matching a similar wake-turbulence category rather than failing session startup. Exact source/profile mapping, wake-turbulence fallback selection rules, supported file versions, legacy INI compatibility and missing motion parameters require a later data-and-simulation design. No fallback performance constants have been agreed beyond the taxi-speed defaults below.
 
 ## 5. Instructor control and student information
 
@@ -110,11 +113,16 @@ An instructor command is not an instantaneous change in actual aircraft speed or
 The initial operational-status model uses one current status rather than multiple simultaneous clearance flags. Student information and instructor movement control are independent:
 
 - The student records informational status in aircraft labels or departure/arrival control lists.
+- The student manages aircraft label control state (`free`, `assumed`, `transferred`) via the aircraft right-click menu.
+- Both main and co-instructors can control all aircraft, initiate an **inbound transfer** from an artificial neighboring ATC position to the student, and **accept an outbound transfer** initiated by the student via the right-click menu.
+- Both instructors can **view the student's informational marks read-only** for coaching and assessment, and must not overwrite them through movement commands.
 - The instructor uses the traffic-management system to control movement.
-- A missing or incorrect student mark must not prevent or initiate aircraft movement.
+- A missing or incorrect student mark or label-control state must not prevent or initiate aircraft movement.
 - Instructor movement must not automatically replace the student's independently maintained clearance mark.
 
-The exact mapping of scenario initial operational state into the two roles' initial views remains part of the ground-stage design. Independence must not be lost by reusing one shared status field for both purposes.
+Scenarios seed initial physical/simulator state and initial student informational/label-control state via distinct fields in the scenario file itself; independence must not be lost by reusing one shared status field for both purposes.
+
+Both instructors are assumed to be live humans coordinating verbally over external voice software (such as Discord). On simultaneous conflicting commands to the same aircraft, the authoritative server applies **last-write-wins** ordering and broadcasts the resulting state to all connected participants.
 
 Departure and arrival lists are required. Their appearance and detailed interactions will follow a reference supplied by the user. Instructor interface design is a separate discussion; this document does not freeze the prototype's panels or controls.
 
@@ -125,6 +133,7 @@ The following details have already been agreed and should be preserved when the 
 ### Route selection and anchors
 
 - The instructor selects the exact ordered sequence of named anchors by clicking them.
+- Selected and active ground routes must be visible to instructors. Detailed ground-route interactions will be finalized in the corresponding implementation phase (following the scenario format and aircraft/label rendering phase).
 - Movement happens between those selected anchors. Automatic destination-based route finding is not required by this baseline.
 - Visible pushback anchors are available on aprons and taxi lines; taxi anchors are available on taxi lines and runways.
 - Anchors have complementary capabilities rather than one exclusive operation type.
@@ -140,11 +149,23 @@ These labels describe semantics, not a finalized file grammar. Heading notation 
 | Standard taxiway | 15 kt |
 | Main / magistral taxiway | 30 kt |
 
-Anchors carry this taxi-speed information. These values are default targets, not enforced maximums; instructors may override them. Acceleration and deceleration must be computed instead of snapping to the target speed.
+Anchors carry this taxi-speed information. On the ground (for ground and tower positions), instructors do not set custom taxi speeds manually — ground movement control consists of **move** and **stop** commands, with target taxi speeds governed by anchor classification (`15 kt` standard, `30 kt` main/magistral). Acceleration and deceleration must be computed instead of snapping to the target speed.
 
-Pushback speed, acceleration/braking parameters, intermediate stopping rules and the exact point at which an anchor's speed information applies are not yet specified.
+In addition, a taxiing aircraft must automatically **stop** if the next anchor on its route is occupied by a holding (stationary) aircraft.
+
+### Baseline numeric rules and kinematic guardrails
+
+Until the dedicated Aircraft Motion and Ground Operations specifications define exact curves and constants, implementations must satisfy these baseline invariants:
+
+- **No-weather kinematics baseline**: While weather influence is deferred to the final development stage, wind is zero and standard atmosphere applies (`GS = TAS` for airborne horizontal speed).
+- **Ground movement & occupied-anchor stopping**: Ground movement commands are **move** and **stop** only (no manual ground speed override). Target taxi speed follows anchor classification (`15 kt` / `30 kt`), and a moving aircraft stops before entering a next anchor occupied by a holding (non-moving) aircraft.
+- **Finite monotonic speed response**: Speed changes must occur over multiple simulation ticks via finite computed acceleration/deceleration — never snapping instantaneously to the target speed in a single tick.
+- **Heading & unit conventions**: `.lnmperf` speeds are TAS in knots and vertical rates are feet per minute. `PUSHBACK_FACING_XXX` defines the required final heading at the pushback endpoint; the exact heading reference frame (magnetic vs. true) and zero/360 normalization belong in the Sector Data and Ground Operations specifications.
+- **Deferred formulas (very low priority)**: Exact acceleration/braking curves, turn-radius/cornering speed limits, exact anchor speed-activation trigger points, and supplementary `.lnmperf` fallback constants are deferred to the Aircraft Motion and Ground Operations specifications at **very low priority**.
 
 ## 7. Persistence, recovery and replay
+
+> Implementation priority: persistence, crash recovery, and replay are required capabilities, scheduled at **low priority** relative to the core live training workflow.
 
 Every applied aircraft movement must be durably recorded, in order and with timing sufficient to reproduce it. Recording only the instructor's intended path or commands is insufficient for the agreed movement replay.
 
@@ -162,69 +183,89 @@ These are capability stages, not implementation tasks or commitments to unapprov
 
 | Order | Stage | Capability objective |
 | --- | --- | --- |
-| 1 | Ground | Instructor-operated pushback and taxi using extended-sector anchors; initial scenarios, flight plans, independent student marks, departure/arrival lists, persistence, recovery and movement replay |
+| 1 | Ground | Instructor-operated pushback and taxi using extended-sector anchors; initial scenarios, flight plans, independent student marks, label control (`free`/`assumed`/`transferred`) with artificial-neighbor transfers, departure/arrival lists, persistence, recovery and movement replay |
 | 2 | Tower | Runway and aerodrome-control training, including support for VFR traffic patterns |
 | 3 | Approach | Arrival/departure and approach-control training using the shared aircraft simulation and sector procedures |
 | 4 | Area control | En-route and area-control training extending the same client/server system |
+| 5 | Weather influence | Weather modeling (wind, QNH/atmosphere, visibility/METAR effects) layered onto the completed controller-training stages |
 
 The initial airborne procedure capability must support flying SIDs and STARs from IVAO-based sector files. The precise allocation between tower and approach delivery, and the procedure semantics supported at each milestone, need stage-level specifications; SID/STAR support must not be silently deferred to a distant optional integration.
 
 Ground operational requirements beyond the agreed baseline, and detailed tower/approach/area workflows, are deferred rather than assumed complete. Later work must define concrete exercises and acceptance cases for each position, including the interaction between ground, runway and airborne movement.
 
-## 9. Acceptance scenarios for the baseline
+## 9. Edge cases and failure handling
 
-These are verification targets for future implementation, not checks reported as executed. Detailed tolerances and platform test environments must be supplied in the relevant implementation specifications.
+The following edge cases define expected handling across the authoritative server and clients:
+
+| Scenario | Priority | Required behavior |
+| --- | --- | --- |
+| Simultaneous main/co-instructor commands on the same aircraft | Baseline | Server serializes accepted commands using **last-write-wins** and broadcasts canonical state to all clients; instructors coordinate verbally outside the app |
+| Student or co-instructor disconnects mid-session | Baseline | Session state is preserved; the disconnected slot becomes available so any person with the connection string can take the position without restarting the exercise (replacing the prototype's permanent `occupied = true` lock) |
+| Host or server interruption / crash | Low | Session state is persisted so restarting resumes from durable state rather than scenario initial setup |
+| Missing or incompatible local sector | Baseline | UI displays a clear error message and refuses to silently substitute an unrelated built-in airport |
+| Missing or incompatible training scenario on guest | N/A | Cannot occur on guests: the host/server loads the scenario and sends canonical session/aircraft state to all connected clients |
+| Missing aircraft performance file (`.lnmperf`) | Baseline | Simulator substitutes an available aircraft profile with a similar wake-turbulence category |
+| Next anchor occupied by a holding aircraft | Baseline | A taxiing aircraft automatically stops rather than entering a next anchor occupied by a stationary (holding) aircraft |
+| Invalid or unauthorized command | Baseline | Client UI only enables/sends valid commands for the participant's role and anchor capabilities; the authoritative server still enforces role authorization and rejects unauthorized or invalid requests without mutating state |
+| Duplicate or conflicting transfer actions | Very low | Deferred hardening: reject cleanly against an invalid label-control state without affecting physical aircraft movement |
+
+## 10. Acceptance scenarios for the baseline
+
+These are verification targets for future implementation, not checks reported as executed. Detailed numeric tolerances (such as exact acceleration curves or platform test matrices) must be supplied in the relevant stage specifications.
 
 | Area | Required observable result |
 | --- | --- |
-| Platform | The same product can host or join using native GPUI builds on Windows, macOS and Linux, with 2D displays |
-| Roles | Main instructor, co-instructor and one student can participate with their intended permissions; role selection cannot elevate a join string's authority |
-| Local sector | A joining client identifies and opens the intended local sector; no host-distributed sector pack is required |
-| Scenario | Loading a scenario restores its initial aircraft locations, flight plans and operational states without scripted movements |
-| Ground routes | Clicking named anchors determines route order, and a pushback-capable endpoint produces the selected final heading |
-| Speed response | Taxi targets default to 15/30 kt as appropriate, allow instructor override and change through computed acceleration/deceleration |
-| Role independence | Changing a student mark does not command aircraft movement; an instructor movement command does not overwrite that mark |
-| Student display | Aircraft labels and departure/arrival lists expose informational aircraft status, with layout checked against the forthcoming reference |
-| Recovery | Interrupting and restarting the host allows the exercise to be recovered from durable state rather than its initial scenario |
-| Replay | Stored movements reproduce recorded aircraft motion in order and timing without requiring richer command/mark replay initially |
-| Session end | Explicit end stops recording but preserves a recording that can be reopened until explicitly deleted |
-| External independence | A training session requires no application connection to voice services, live networks, flight simulators, weather providers or other third-party services |
+| Platform | Native GPUI builds compile, launch, load a local sector, host/join a session, and render the 2D sector canvas without crashing on Windows, macOS, and Linux (X11 and Wayland) |
+| Hosting mode | A session can be hosted in-app by the main instructor and joined by the co-instructor and student via direct IP/address under reachable network conditions (separate self-hostable server binary acceptance is deferred to that revision) |
+| Roles & conflicts | Main instructor, co-instructor, and one student operate with their intended permissions; role parameter tampering or student movement commands are rejected; co-instructor explicit session end is rejected; conflicting simultaneous instructor commands resolve deterministically via server-ordered last-write-wins |
+| Local sector | Each participant downloads/provides sector packs separately; a joining client identifies and opens the matching local sector without receiving a host-distributed sector pack; a missing or mismatched local sector displays a clear error in the UI and never falls back to a built-in airport |
+| Scenario & profiles | The host loads a scenario and sends initial physical aircraft locations/flight plans and separate initial student informational/label-control states to all clients (guests require no local scenario file), with zero uncommanded aircraft movement over idle time; **A320, B737, and C172** profiles are embedded by default (high priority in that phase), and any other missing `.lnmperf` profile falls back to a profile of a similar wake-turbulence category |
+| Ground routes | Clicking ordered anchors `A → B → C` moves the aircraft through `A, B, C` in order and displays the route to instructors; instructors can issue **move** and **stop** commands; commanding pushback to an anchor with `PUSHBACK_FACING_H` ends at that anchor facing `H` (within tolerance defined in Ground Operations); pushback is only permitted to anchors with `PUSHBACK_FACING_*`; a taxiing aircraft stops automatically if the next anchor is occupied by a holding (stationary) aircraft |
+| Speed response | On the ground (ground/tower positions), standard-classified anchors target `15 kt` and main/magistral anchors target `30 kt` with no manual ground taxi-speed override; observed speed transitions monotonically across multiple ticks via computed acceleration/deceleration rather than snapping in a single tick |
+| Role independence & transfers | Changing a student mark or label-control state (`free`/`assumed`/`transferred`, via right-click menu) never commands or blocks aircraft movement; instructor movement commands never overwrite student marks; instructors view student marks read-only and can initiate inbound / accept outbound artificial-neighbor transfers via right-click menu |
+| Student display | Aircraft labels and departure/arrival lists display callsign, flight-plan summary, label-control state, and student informational status, reflecting edits promptly; visual layout conformance is gated on checking in the user-supplied reference artifact |
+| Disconnect & recovery | When a student disconnects, session state is preserved and any person with the connection string can take the vacant position without restarting; once low-priority persistence is implemented, abrupt host termination following `>= 1` applied movement allows recovering aircraft positions, headings, speeds, and student marks from durable state rather than scenario initial state |
+| Replay | Reopening a saved recording replays recorded aircraft positions and headings in chronological order with monotonic timing matching recorded sample intervals within the Recording specification's tolerance |
+| Session end | Explicit end stops recording and preserves the recording so it remains reopenable across restarts until explicitly deleted |
+| External independence | A full host + co-instructor + student session runs on an isolated network with zero outbound connections to third-party services, voice servers, live ATC networks, flight simulators, or weather providers |
 
-Remote hosting acceptance must additionally demonstrate the agreed start-and-join experience against explicitly validated network conditions. The feasibility issue below prevents treating universal zero-configuration reachability as already solved.
+## 11. Open technical questions and deliberately deferred work
 
-## 10. Open technical questions and deliberately deferred work
+### Internet reachability: phased hosting modes and direct-NAT constraint
 
-### Internet reachability: unresolved feasibility constraint
+The product addresses remote hosting without relying on third-party services in two phases:
 
-The intended experience is that the main instructor starts hosting, shares connection information and other participants join without configuring routers or networking. The application must also avoid third-party services.
+1. **Direct instructor-hosted session via IP (primary / initial mode)**, for directly reachable network conditions (LAN, user-managed VPN/mesh, or port-forwarded/public IP).
+2. **Separate self-hostable server binary (planned for a later revision)**, giving participants a stable server endpoint without revealing an instructor's personal IP or depending on residential NAT traversal.
 
-These are retained product requirements, but no implementation has been validated that guarantees this combination on arbitrary consumer networks. ISP shared-address space is not globally routable, and NAT traversal distinguishes direct host candidates from addresses discovered or reached using additional infrastructure. A join string cannot create reachability. See [RFC 6598, section 1](https://www.rfc-editor.org/rfc/rfc6598.html#section-1) and [RFC 8445, section 2.1](https://www.rfc-editor.org/rfc/rfc8445.html#section-2.1).
-
-Consequently, universal zero-configuration direct hosting cannot be promised from the invitation mechanism alone. This is a feasibility conclusion, not approval to add discovery/relay services, require user network configuration or drop Internet support. Establish supported network conditions and resolve this conflict before claiming the hosting requirement is implemented.
+Direct zero-configuration hosting from an instructor's residential machine *without* sharing an IP and *without* any intermediary/relay server remains infeasible across arbitrary consumer networks: ISP shared-address space is not globally routable, and NAT traversal requires external discovery/relay candidates. See [RFC 6598, section 1](https://www.rfc-editor.org/rfc/rfc6598.html#section-1) and [RFC 8445, section 2.1](https://www.rfc-editor.org/rfc/rfc8445.html#section-2.1). Accordingly, initial remote hosting uses direct IP/address connection, and IP-less remote joining is targeted for the separate self-hostable server binary revision. Transport encryption, address/invitation ergonomics, and reconnect tokens require a focused session-and-networking design.
 
 ### Further specifications
 
-| Topic | What remains to be settled |
-| --- | --- |
-| Instructor UI | Convenient traffic-management and movement controls; discuss separately |
-| Student lists | Departure/arrival reference, layout, fields and interactions |
-| Observer support | Permissions, visible information, invitations and delivery timing; keep the agreed maximum of four |
-| Sector data | Import compatibility, local identity/version matching, ground extension syntax and routing geometry |
-| Scenarios | Complete flight-plan/state fields and initialization of independent role views |
-| Aircraft motion | Supplementary performance data, aircraft/profile mapping, physical response models and measurable realism criteria |
-| Ground operations | Complete exercise workflows, status vocabulary, pushback/stop semantics and remaining movement rules |
-| Recording | Storage, crash consistency, replay/recovery interfaces and local supporting-data dependencies |
-| Later stages | Detailed tower, approach and area exercises, including VFR circuits and early SID/STAR flying |
+| Topic | Stage gate | What remains to be settled |
+| --- | --- | --- |
+| Session & networking | Stage 1 (Ground) | Direct in-app host UX, TLS/transport security, co-instructor invitations, reconnect tokens, and post-crash guest reconnection (separate self-hostable server binary targeted for a later revision) |
+| Instructor UI | Stage 1 (Ground) | Convenient traffic-management, movement, and artificial-neighbor transfer controls; discuss separately |
+| Student lists | Stage 1 (Ground) | Departure/arrival reference artifact, layout, fields, and interactions |
+| Sector data | Stage 1 (Ground) | Import compatibility, local identity/version matching, ground extension syntax, heading convention, and routing geometry |
+| Scenarios | Stage 1 (Ground) | Complete flight-plan fields and separate initial physical vs. student-mark/control-state serialization |
+| Aircraft motion | Stage 1 (Very low priority for detailed curves) | Supplementary performance data, aircraft/profile mapping, wake-turbulence fallback selection, detailed acceleration/braking/turn curves, and measurable realism tolerances |
+| Ground operations | Stage 1 (Ground) | Complete exercise workflows, status vocabulary, pushback/stop/hold semantics, live route-editing vs. route replacement, and remaining movement rules |
+| Recording | Stage 1 (Low priority) | Storage format, crash consistency, replay controls/tolerances, recovery interfaces, and local supporting-data dependencies |
+| Observer support | Deferred | Permissions, visible information, invitations, and delivery timing; keep the agreed maximum of four |
+| Later stages | Stages 2–5 | Detailed tower, approach, area exercises (including VFR circuits and early SID/STAR flying), and final-stage weather influence |
 
 These deferred areas are visible boundaries of the current high-level specification. They are not permission to invent requirements during implementation.
 
-## 11. Existing implementation evidence
+## 12. Existing implementation evidence
 
 The following observations ground this specification in the current prototype. They describe inspected source, not interactive verification:
 
-- `crates/atc-server/src/sessions.rs` generates a student join string. `crates/atc-server/src/http.rs` admits the student using that string and separately checks a configured trainer credential.
+- `crates/atc-server/src/sessions.rs` generates a student join string. `crates/atc-server/src/http.rs` admits the student using that string (currently locking the student slot permanently via `occupied = true`) and separately checks a configured trainer credential.
+- `crates/atc-client/src/host.rs` runs an in-process Axum server bound to `127.0.0.1:0` over plain HTTP with `StudentPositionType::Gnd` and empty `trainer_hashes`, while `crates/atc-server` already exists as a separate server binary crate.
 - `crates/atc-client/src/sector_viewer.rs` starts a host from a loaded Aurora sector and accepts a host address and join string in student mode.
 - `crates/atc-client/src/sector_viewer/student.rs` compares the host's sector identity with the sector loaded locally by the student.
-- The server moves aircraft along instructor paths. IVAO importing, realistic aircraft responses and durable replay must be implemented and verified separately.
+- `crates/atc-server/src/commands.rs` moves aircraft along instructor paths and currently shares `AircraftStatus` across movement and student metadata commands (allowing trainers to mutate student metadata), which must be decoupled to meet Section 5.
+- IVAO importing, realistic aircraft responses, label-control transfers, and durable replay must be implemented and verified separately.
 
 The existing code and historical documents are useful migration inputs, but passing their current tests would not establish compliance with this specification.
