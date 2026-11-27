@@ -1,7 +1,5 @@
 //! WebSocket adapter: connect to `/api/v1/ws`, decode envelopes into
-//! [`ServerEvent`]s, and forward them on a Tokio channel that the iced
-//! subscription drains. The pure decoding helper is unit-testable without a
-//! live socket.
+//! [`ServerEvent`]s, and forward them to the caller on a Tokio channel.
 
 use atc_shared::ids::SessionId;
 use atc_shared::protocol::{ClientEvent, ServerEvent, WsEnvelope};

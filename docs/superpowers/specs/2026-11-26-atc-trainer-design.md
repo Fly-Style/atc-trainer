@@ -14,7 +14,7 @@ This document supersedes conflicting product requirements in the [historical sof
 
 ## 2. Product boundaries
 
-- Native Rust desktop application using [GPUI](https://gpui.rs/), replacing Iced.
+- Native Rust desktop application using [GPUI](https://gpui.rs/).
 - Native builds for Windows, macOS and Linux. All initial controller displays are 2D.
 - The main instructor hosts the server through the application. The co-instructor and student connect remotely over the Internet.
 - One student per session initially. Up to four observers are part of the intended product; observer permissions and delivery timing are deferred.
@@ -223,8 +223,8 @@ These deferred areas are visible boundaries of the current high-level specificat
 The following observations ground this specification in the current prototype. They describe inspected source, not interactive verification:
 
 - `crates/atc-server/src/sessions.rs` generates a student join string. `crates/atc-server/src/http.rs` admits the student using that string and separately checks a configured trainer credential.
-- `crates/atc-client/src/ui/start_screen.rs` currently requests server addresses separately from the join string. It has no complete co-instructor join flow or generated-invitation display/copy workflow.
-- `crates/atc-client/src/ui/app.rs` automatically fetches sector metadata after joining. `crates/atc-server/src/http.rs` returns the built-in airport regardless of the requested sector identifier. This host-supplied geometry must not be mistaken for the newly agreed local-sector resolution behaviour.
-- The existing desktop UI uses Iced; aircraft motion follows instructor paths. IVAO importing, realistic aircraft responses and durable replay must be implemented and verified separately.
+- `crates/atc-client/src/sector_viewer.rs` starts a host from a loaded Aurora sector and accepts a host address and join string in student mode.
+- `crates/atc-client/src/sector_viewer/student.rs` compares the host's sector identity with the sector loaded locally by the student.
+- The server moves aircraft along instructor paths. IVAO importing, realistic aircraft responses and durable replay must be implemented and verified separately.
 
 The existing code and historical documents are useful migration inputs, but passing their current tests would not establish compliance with this specification.

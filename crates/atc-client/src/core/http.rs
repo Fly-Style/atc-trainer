@@ -1,6 +1,4 @@
-//! Shared HTTP adapter for the desktop clients. The command processor emits
-//! request descriptors for the legacy UI, and GPUI submits student admissions
-//! through the same adapter.
+//! Desktop client HTTP adapter for API requests and command processor descriptors.
 
 use crate::core::command::{HttpCorrelation, HttpRequestSpec};
 use atc_shared::protocol::*;

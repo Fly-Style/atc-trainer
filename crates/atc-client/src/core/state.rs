@@ -167,7 +167,7 @@ impl ViewState {
     }
 }
 
-/// Top-level client state held by the iced application and consumed by tests.
+/// Client state updated by the command processor.
 #[derive(Debug, Clone)]
 pub struct ClientState {
     pub server: ServerProfile,
