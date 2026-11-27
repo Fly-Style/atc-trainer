@@ -1,10 +1,11 @@
 use std::{cell::Cell, collections::BTreeMap, path::PathBuf, rc::Rc, sync::Arc};
 
+use atc_shared::protocol::JoinStudentResponse;
 use gpui::{
     actions, canvas, div, fill, point, prelude::*, px, rgb, size, App, Application, Bounds,
-    Context, FocusHandle, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    PathBuilder, PathPromptOptions, Pixels, Point, ScrollHandle, ScrollWheelEvent, Size, TextRun,
-    TitlebarOptions, Window, WindowBounds, WindowOptions,
+    Context, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, PathBuilder, PathPromptOptions, Pixels, Point, ScrollHandle, ScrollWheelEvent,
+    Size, TextRun, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 
 use crate::{
@@ -12,6 +13,11 @@ use crate::{
     host::{self, HostInfo},
     sector_camera::{MapBounds, SectorCamera},
 };
+
+mod student;
+mod text_input;
+
+use text_input::TextInput;
 
 const MAP: u32 = 0x0a0b0b;
 const PANEL: u32 = 0x171a1b;
@@ -32,6 +38,15 @@ actions!(
 );
 
 pub fn run(path: Option<PathBuf>) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build();
+    let http_runtime = runtime
+        .as_ref()
+        .map(|runtime| runtime.handle().clone())
+        .map_err(ToString::to_string);
+
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys([
             KeyBinding::new("secondary-o", OpenSector, None),
@@ -75,6 +90,8 @@ pub fn run(path: Option<PathBuf>) {
                         error: None,
                         hosting: false,
                         host: None,
+                        student: None,
+                        http_runtime,
                     };
                     if let Some(path) = path {
                         viewer.load(path, cx);
@@ -86,6 +103,9 @@ pub fn run(path: Option<PathBuf>) {
         .expect("Opening the sector viewer window");
         cx.activate(true);
     });
+    if let Ok(runtime) = runtime {
+        runtime.shutdown_background();
+    }
 }
 
 struct SectorViewer {
@@ -101,11 +121,29 @@ struct SectorViewer {
     error: Option<String>,
     hosting: bool,
     host: Option<HostInfo>,
+    student: Option<StudentMode>,
+    http_runtime: Result<tokio::runtime::Handle, String>,
+}
+
+enum StudentMode {
+    JoinForm {
+        address: Entity<TextInput>,
+        invitation: Entity<TextInput>,
+    },
+    Admitted(JoinStudentResponse),
 }
 
 impl SectorViewer {
+    fn can_open(&self) -> bool {
+        !self.busy
+            && !self.hosting
+            && self.host.is_none()
+            && self.joined_student().is_none()
+            && !matches!(self.student, Some(StudentMode::JoinForm { .. }))
+    }
+
     fn open(&mut self, cx: &mut Context<Self>) {
-        if self.busy {
+        if !self.can_open() {
             return;
         }
         self.busy = true;
@@ -178,7 +216,7 @@ impl SectorViewer {
     }
 
     fn host_session(&mut self, cx: &mut Context<Self>) {
-        if self.busy || self.hosting || self.host.is_some() {
+        if self.busy || self.hosting || self.host.is_some() || self.student.is_some() {
             return;
         }
         let Some((_, sector)) = self.sector.as_ref() else {
@@ -216,6 +254,202 @@ impl SectorViewer {
             });
         })
         .detach();
+    }
+
+    fn show_join_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy || self.hosting || self.host.is_some() || self.student.is_some() {
+            return;
+        }
+        let address = cx.new(|cx| TextInput::new("http://127.0.0.1:8080", cx));
+        let invitation = cx.new(|cx| TextInput::new("join-XXXXXX", cx));
+        address.read(cx).focus_handle(cx).focus(window);
+        self.student = Some(StudentMode::JoinForm {
+            address,
+            invitation,
+        });
+        self.error = None;
+        cx.notify();
+    }
+
+    fn close_join_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.busy && matches!(self.student, Some(StudentMode::JoinForm { .. })) {
+            self.student = None;
+            self.error = None;
+            self.focus.focus(window);
+            cx.notify();
+        }
+    }
+
+    fn join_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let Some(StudentMode::JoinForm {
+            address,
+            invitation,
+        }) = &self.student
+        else {
+            return;
+        };
+        let address = match student::host_address(address.read(cx).value()) {
+            Ok(address) => address,
+            Err(error) => {
+                self.error = Some(error.into());
+                cx.notify();
+                return;
+            }
+        };
+        let invitation = invitation.read(cx).value().trim().to_owned();
+        if invitation.is_empty() {
+            self.error = Some("Enter the student invitation.".into());
+            cx.notify();
+            return;
+        }
+        let runtime = match &self.http_runtime {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                self.error = Some(format!("Could not start the network runtime. {error}"));
+                cx.notify();
+                return;
+            }
+        };
+
+        self.busy = true;
+        self.error = None;
+        cx.notify();
+
+        let request = runtime.spawn(student::join(address, invitation));
+        cx.spawn_in(window, async move |this, cx| {
+            let result = request.await;
+            let _ = this.update_in(cx, |viewer, window, cx| {
+                viewer.busy = false;
+                match result {
+                    Ok(Ok(admission)) => {
+                        viewer.student = Some(StudentMode::Admitted(admission));
+                        viewer.focus.focus(window);
+                    }
+                    Ok(Err(error)) => viewer.error = Some(error),
+                    Err(_) => viewer.error = Some("The join request stopped unexpectedly.".into()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn joined_student(&self) -> Option<&JoinStudentResponse> {
+        let Some(StudentMode::Admitted(admission)) = &self.student else {
+            return None;
+        };
+        let local = self.sector.as_ref().map(|(_, sector)| &sector.identity);
+        student::matches_sector(admission, local).then_some(admission)
+    }
+
+    fn render_join_screen(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let mut card = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w_full()
+            .max_w(px(420.0))
+            .p_5()
+            .bg(rgb(PANEL))
+            .border_1()
+            .border_color(rgb(BORDER));
+
+        match &self.student {
+            Some(StudentMode::JoinForm {
+                address,
+                invitation,
+            }) => {
+                card = card
+                    .child(div().text_lg().child("Join as Student"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child("Host address")
+                            .child(address.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child("Student invitation")
+                            .child(invitation.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                toolbar_button(
+                                    "submit-join",
+                                    if self.busy {
+                                        "Joining…"
+                                    } else {
+                                        "Join Session"
+                                    },
+                                )
+                                .when(!self.busy, |button| {
+                                    button.on_click(cx.listener(|viewer, _, window, cx| {
+                                        viewer.join_session(window, cx);
+                                    }))
+                                }),
+                            )
+                            .when(!self.busy, |buttons| {
+                                buttons.child(toolbar_button("back", "Back").on_click(cx.listener(
+                                    |viewer, _, window, cx| viewer.close_join_form(window, cx),
+                                )))
+                            }),
+                    );
+            }
+            Some(StudentMode::Admitted(admission)) if self.joined_student().is_none() => {
+                let description = match &self.sector {
+                    Some((name, _)) => format!(
+                        "{name} does not match the host’s sector. Choose the matching Aurora .isc file."
+                    ),
+                    None => "Choose the matching Aurora .isc file to open the session.".into(),
+                };
+                card = card
+                    .child(div().text_lg().child("Select the session sector"))
+                    .child(div().child(format!("Required sector · {}", admission.sector_name)))
+                    .child(
+                        div()
+                            .text_color(rgb(MUTED))
+                            .child(admission.sector_id.to_string()),
+                    )
+                    .child(div().text_color(rgb(MUTED)).child(description))
+                    .child(
+                        div().flex().child(
+                            toolbar_button(
+                                "open-matching-sector",
+                                if self.busy {
+                                    "Opening…"
+                                } else {
+                                    "Select Sector…"
+                                },
+                            )
+                            .when(!self.busy, |button| {
+                                button.on_click(cx.listener(|viewer, _, _, cx| viewer.open(cx)))
+                            }),
+                        ),
+                    );
+            }
+            _ => return None,
+        }
+
+        Some(
+            div()
+                .flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .p_4()
+                .child(card.children(self.error.as_deref().map(error_banner))),
+        )
     }
 
     fn select(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -283,7 +517,19 @@ impl SectorViewer {
         cx.notify();
     }
 
-    fn map_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.student, Some(StudentMode::JoinForm { .. })) {
+            match event.keystroke.key.as_str() {
+                "enter" => self.join_session(window, cx),
+                "escape" => self.close_join_form(window, cx),
+                _ => {}
+            }
+            return;
+        }
+        if self.student.is_some() && self.joined_student().is_none() {
+            return;
+        }
+
         let key = &event.keystroke;
         if self.airport_bounds.is_none()
             || key.modifiers.control
@@ -319,6 +565,32 @@ impl SectorViewer {
 
 impl Render for SectorViewer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let root =
+            div()
+                .track_focus(&self.focus)
+                .on_key_down(cx.listener(Self::key_down))
+                .on_action(cx.listener(|viewer, _: &OpenSector, _, cx| viewer.open(cx)))
+                .on_action(cx.listener(|viewer, _: &FitAirport, _, cx| viewer.fit(cx)))
+                .on_action(cx.listener(|viewer, _: &NextAirport, _, cx| {
+                    viewer.select(viewer.selected + 1, cx)
+                }))
+                .on_action(cx.listener(|viewer, _: &PreviousAirport, _, cx| {
+                    if viewer.selected > 0 {
+                        viewer.select(viewer.selected - 1, cx);
+                    }
+                }))
+                .on_action(|_: &CloseWindow, window, _| window.remove_window())
+                .flex()
+                .flex_col()
+                .size_full()
+                .bg(rgb(MAP))
+                .text_sm()
+                .text_color(rgb(TEXT));
+
+        if let Some(join_screen) = self.render_join_screen(cx) {
+            return root.child(join_screen);
+        }
+
         let sector = self.sector.as_ref().map(|(_, sector)| Arc::clone(sector));
         let selected = self.selected;
         let map_bounds = self.airport_bounds;
@@ -381,7 +653,8 @@ impl Render for SectorViewer {
                 )
         });
 
-        let can_host = self.sector.is_some() && !self.busy && !self.hosting && self.host.is_none();
+        let can_join = !self.busy && !self.hosting && self.host.is_none() && self.student.is_none();
+        let can_host = self.sector.is_some() && can_join;
         let toolbar = div()
             .flex()
             .items_center()
@@ -392,18 +665,23 @@ impl Render for SectorViewer {
             .bg(rgb(PANEL))
             .border_b_1()
             .border_color(rgb(BORDER))
-            .child(
-                toolbar_button(
-                    "open-sector",
-                    if self.busy {
-                        "Opening…"
-                    } else {
-                        "Open Sector…"
-                    },
-                )
-                .when(!self.busy, |button| {
-                    button.on_click(cx.listener(|viewer, _, _, cx| viewer.open(cx)))
-                }),
+            .when(
+                self.student.is_none() && self.host.is_none() && !self.hosting,
+                |toolbar| {
+                    toolbar.child(
+                        toolbar_button(
+                            "open-sector",
+                            if self.busy {
+                                "Opening…"
+                            } else {
+                                "Open Sector…"
+                            },
+                        )
+                        .when(self.can_open(), |button| {
+                            button.on_click(cx.listener(|viewer, _, _, cx| viewer.open(cx)))
+                        }),
+                    )
+                },
             )
             .when_some(self.sector.as_ref(), |toolbar, (name, _)| {
                 toolbar
@@ -419,44 +697,34 @@ impl Render for SectorViewer {
                         toolbar_button("fit", "Fit Airport")
                             .on_click(cx.listener(|viewer, _, _, cx| viewer.fit(cx))),
                     )
-                    .child(
-                        toolbar_button(
-                            "host-session",
-                            if self.hosting {
-                                "Starting…"
-                            } else if self.host.is_some() {
-                                "Hosting"
-                            } else {
-                                "Host Session"
-                            },
+                    .when(self.student.is_none(), |toolbar| {
+                        toolbar.child(
+                            toolbar_button(
+                                "host-session",
+                                if self.hosting {
+                                    "Starting…"
+                                } else if self.host.is_some() {
+                                    "Hosting"
+                                } else {
+                                    "Host Session"
+                                },
+                            )
+                            .when(!can_host, |button| button.text_color(rgb(MUTED)))
+                            .when(can_host, |button| {
+                                button.on_click(
+                                    cx.listener(|viewer, _, _, cx| viewer.host_session(cx)),
+                                )
+                            }),
                         )
-                        .when(!can_host, |button| button.text_color(rgb(MUTED)))
-                        .when(can_host, |button| {
-                            button.on_click(cx.listener(|viewer, _, _, cx| viewer.host_session(cx)))
-                        }),
-                    )
+                    })
+            })
+            .when(can_join, |toolbar| {
+                toolbar.child(toolbar_button("join-student", "Join as Student").on_click(
+                    cx.listener(|viewer, _, window, cx| viewer.show_join_form(window, cx)),
+                ))
             });
 
-        div()
-            .track_focus(&self.focus)
-            .on_key_down(cx.listener(Self::map_key))
-            .on_action(cx.listener(|viewer, _: &OpenSector, _, cx| viewer.open(cx)))
-            .on_action(cx.listener(|viewer, _: &FitAirport, _, cx| viewer.fit(cx)))
-            .on_action(cx.listener(|viewer, _: &NextAirport, _, cx| {
-                viewer.select(viewer.selected + 1, cx)
-            }))
-            .on_action(cx.listener(|viewer, _: &PreviousAirport, _, cx| {
-                if viewer.selected > 0 {
-                    viewer.select(viewer.selected - 1, cx);
-                }
-            }))
-            .on_action(|_: &CloseWindow, window, _| window.remove_window())
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(rgb(MAP))
-            .text_sm()
-            .text_color(rgb(TEXT))
+        root
             .child(toolbar)
             .when_some(self.host.as_ref(), |root, info| {
                 let address = info.address.clone();
@@ -497,20 +765,11 @@ impl Render for SectorViewer {
                         ),
                 )
             })
-            .when_some(self.error.as_ref(), |root, error| {
-                root.child(
-                    div()
-                        .flex_shrink_0()
-                        .max_h(px(84.0))
-                        .id("load-error")
-                        .overflow_y_scroll()
-                        .px_3()
-                        .py_2()
-                        .bg(rgb(0x332121))
-                        .text_color(rgb(0xffc9bd))
-                        .child(error.clone()),
-                )
+            .when_some(self.joined_student(), |root, admission| {
+                root.child(div().px_3().py_2().bg(rgb(PANEL)).text_color(rgb(MUTED))
+                    .child(format!("Joined as Student · {}", admission.sector_name)))
             })
+            .children(self.error.as_deref().map(error_banner))
             .child(
                 div().flex().flex_1().min_h_0().children(sidebar).child(
                     div()
@@ -553,6 +812,19 @@ impl Render for SectorViewer {
                 )
             })
     }
+}
+
+fn error_banner(error: &str) -> impl IntoElement {
+    div()
+        .flex_shrink_0()
+        .max_h(px(84.0))
+        .id("load-error")
+        .overflow_y_scroll()
+        .px_3()
+        .py_2()
+        .bg(rgb(0x332121))
+        .text_color(rgb(0xffc9bd))
+        .child(error.to_owned())
 }
 
 fn toolbar_button(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {

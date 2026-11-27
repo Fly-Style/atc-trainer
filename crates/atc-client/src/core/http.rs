@@ -1,11 +1,6 @@
-//! HTTP adapter functions used by the iced runtime to execute the
-//! [`SideEffect::Http`] descriptors emitted by the command processor.
-//!
-//! Returning typed `Result`s here means the UI layer just spawns these as
-//! `iced::Task::perform` futures and converts the outcome into a follow-up
-//! message. Test coverage for the request *shape* lives at the command
-//! processor level; these functions are integration-tested through
-//! `atc-test-support` against the real server.
+//! Shared HTTP adapter for the desktop clients. The command processor emits
+//! request descriptors for the legacy UI, and GPUI submits student admissions
+//! through the same adapter.
 
 use crate::core::command::{HttpCorrelation, HttpRequestSpec};
 use atc_shared::protocol::*;
@@ -73,13 +68,15 @@ impl HttpClient {
     pub async fn perform(&self, spec: HttpRequestSpec) -> Result<HttpOutcome, HttpError> {
         match spec.correlation {
             HttpCorrelation::TrainerLogin => {
-                let r: TrainerLoginResponse =
-                    self.post_json("/api/v1/auth/trainer-login", &spec.body, false).await?;
+                let r: TrainerLoginResponse = self
+                    .post_json("/api/v1/auth/trainer-login", &spec.body, false)
+                    .await?;
                 Ok(HttpOutcome::TrainerLogin(r))
             }
             HttpCorrelation::CreateSession => {
-                let r: CreateSessionResponse =
-                    self.post_json("/api/v1/sessions", &spec.body, spec.with_auth).await?;
+                let r: CreateSessionResponse = self
+                    .post_json("/api/v1/sessions", &spec.body, spec.with_auth)
+                    .await?;
                 Ok(HttpOutcome::CreateSession(r))
             }
             HttpCorrelation::CreateStudentPosition { session_id } => {
@@ -88,11 +85,9 @@ impl HttpClient {
                     self.post_json(&path, &spec.body, spec.with_auth).await?;
                 Ok(HttpOutcome::CreateStudentPosition(r))
             }
-            HttpCorrelation::JoinStudent => {
-                let r: JoinStudentResponse =
-                    self.post_json("/api/v1/sessions/join-student", &spec.body, false).await?;
-                Ok(HttpOutcome::JoinStudent(r))
-            }
+            HttpCorrelation::JoinStudent => Ok(HttpOutcome::JoinStudent(
+                self.join_student(&spec.body).await?,
+            )),
             HttpCorrelation::StartSession { session_id } => {
                 let path = format!("/api/v1/sessions/{}/start", session_id.as_str());
                 let r: StartSessionResponse =
@@ -107,10 +102,18 @@ impl HttpClient {
         }
     }
 
+    pub(crate) async fn join_student(
+        &self,
+        request: &impl serde::Serialize,
+    ) -> Result<JoinStudentResponse, HttpError> {
+        self.post_json("/api/v1/sessions/join-student", request, false)
+            .await
+    }
+
     async fn post_json<T: DeserializeOwned>(
         &self,
         path: &str,
-        body: &serde_json::Value,
+        body: &impl serde::Serialize,
         with_auth: bool,
     ) -> Result<T, HttpError> {
         let mut req = self.inner.post(format!("{}{}", self.base, path)).json(body);
@@ -122,7 +125,11 @@ impl HttpClient {
         decode(req.send().await?).await
     }
 
-    async fn get_json<T: DeserializeOwned>(&self, path: &str, with_auth: bool) -> Result<T, HttpError> {
+    async fn get_json<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        with_auth: bool,
+    ) -> Result<T, HttpError> {
         let mut req = self.inner.get(format!("{}{}", self.base, path));
         if with_auth {
             if let Some(t) = &self.bearer {
